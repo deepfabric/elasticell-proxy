@@ -44,18 +44,21 @@ func NewRedisProxy(cfg *Cfg) *RedisProxy {
 		log.Fatalf("bootstrap: create pd client failed, errors:\n%+v", err)
 	}
 
-	return &RedisProxy{
-		svr: goetty.NewServer(cfg.Addr,
-			redis.NewRedisDecoder(),
-			goetty.NewEmptyEncoder(),
-			goetty.NewInt64IDGenerator()),
-		pdClient: client,
+	tcpSvr := goetty.NewServer(cfg.Addr,
+		redis.NewRedisDecoder(),
+		goetty.NewEmptyEncoder(),
+		goetty.NewInt64IDGenerator())
 
+	return &RedisProxy{
+		pdClient:        client,
+		cfg:             cfg,
+		svr:             tcpSvr,
+		supportCmds:     make(map[string]struct{}),
+		routing:         newRouting(),
 		ranges:          util.NewCellTree(),
 		cellLeaderAddrs: make(map[uint64]string),
 		conns:           make(map[string]*goetty.Connector),
-
-		stopC: make(chan struct{}),
+		stopC:           make(chan struct{}),
 	}
 }
 
@@ -99,6 +102,10 @@ func (p *RedisProxy) doStop() {
 
 func (p *RedisProxy) init() {
 	p.refreshRanges()
+
+	for _, cmd := range p.cfg.SupportCMDs {
+		p.supportCmds[cmd] = struct{}{}
+	}
 }
 
 func (p *RedisProxy) getSyncEpoch() uint64 {
@@ -126,7 +133,7 @@ func (p *RedisProxy) refreshRanges() {
 	p.clean()
 	for _, r := range rsp.Ranges {
 		p.ranges.Update(r.Cell)
-		p.cellLeaderAddrs[r.Cell.ID] = r.LeaderStore.Address
+		p.cellLeaderAddrs[r.Cell.ID] = r.LeaderStore.ClientAddress
 	}
 	p.syncEpoch++
 
@@ -143,11 +150,12 @@ func (p *RedisProxy) clean() {
 
 func (p *RedisProxy) doConnection(session goetty.IOSession) error {
 	addr := session.RemoteAddr()
-	log.Debugf("redis-[%s]: connected", addr)
+	log.Infof("redis-[%s]: connected", addr)
 
-	// every client has 2 goroutines, read and write
+	// every client has 3 goroutines, read,write,retry
 	rs := newSession(session)
 	go rs.writeLoop()
+	go rs.retryLoop(p)
 	defer rs.close()
 
 	for {
@@ -193,6 +201,13 @@ func (p *RedisProxy) handleReq(rs *redisSession, req *raftcmdpb.Request) {
 		}
 
 		leader := p.getLeaderStoreAddr(req.Cmd[1])
+		if log.DebugEnabled() {
+			log.Debugf("redis-[%s]: handle req, leader=<%s> times=<%d>",
+				rs.session.RemoteAddr(),
+				leader,
+				retries)
+		}
+
 		if leader == "" {
 			err = fmt.Errorf("leader not found for key: %v", req.Cmd[1])
 		} else {
@@ -230,6 +245,14 @@ func (p *RedisProxy) forwardTo(addr string, req *raftcmdpb.Request, rs *redisSes
 	if err != nil {
 		conn.Close()
 		return errors.Wrapf(err, "writeTo")
+	}
+
+	if log.DebugEnabled() {
+		log.Debugf("redis-[%s]: write to, to=<%s> epoch=<%d> uuid=<%v>",
+			rs.session.RemoteAddr(),
+			addr,
+			req.Epoch,
+			req.UUID)
 	}
 
 	p.routing.put(req.UUID, rs)

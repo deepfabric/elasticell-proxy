@@ -18,6 +18,7 @@ type Cfg struct {
 	PDAddrs       []string `json:"pdAddrs"`
 	MaxRetries    int      `json:"maxRetries"`
 	RetryDuration int64    `json:"retryDuration"`
+	SupportCMDs   []string `json:"supportCMDs"`
 }
 
 // GetCfg get cfg from command

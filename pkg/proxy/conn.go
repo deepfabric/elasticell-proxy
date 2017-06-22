@@ -50,20 +50,25 @@ func (p *RedisProxy) createConn(addr string) *goetty.Connector {
 
 	conn := goetty.NewConnector(p.getConnectionCfg(addr), &redisDecoder{}, &redisEncoder{})
 	p.conns[addr] = conn
-	go p.loopReadFromBackendServer(conn)
+	go p.loopReadFromBackendServer(addr, conn)
 	p.Unlock()
 	return conn
 }
 
-func (p *RedisProxy) loopReadFromBackendServer(conn *goetty.Connector) {
+func (p *RedisProxy) loopReadFromBackendServer(addr string, conn *goetty.Connector) {
 	for {
 		data, err := conn.Read()
 		if err != nil {
+			conn.Close()
 			return
 		}
 
 		rsp, ok := data.(*raftcmdpb.Response)
 		if ok {
+			log.Debugf("backend-[%s]: read a response: uuid=<%+v> resp=<%+v>",
+				addr,
+				rsp.UUID,
+				rsp)
 			p.onResp(rsp)
 		}
 	}
@@ -101,6 +106,6 @@ func (p *RedisProxy) checkConnect(addr string, conn *goetty.Connector) bool {
 		return false
 	}
 
-	go p.loopReadFromBackendServer(conn)
+	go p.loopReadFromBackendServer(addr, conn)
 	return ok
 }

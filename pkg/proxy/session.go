@@ -80,6 +80,10 @@ func (rs *redisSession) respError(err error) {
 	buf := rs.session.OutBuf()
 	redis.WriteError(util.StringToSlice(err.Error()), buf)
 	rs.session.WriteOutBuf()
+
+	log.Debugf("redis-[%s]: response error, err=<%+v>",
+		rs.session.RemoteAddr(),
+		err)
 }
 
 func (rs *redisSession) doResp(resp *raftcmdpb.Response) {
@@ -120,4 +124,8 @@ func (rs *redisSession) doResp(resp *raftcmdpb.Response) {
 	}
 
 	rs.session.WriteOutBuf()
+
+	log.Debugf("redis-[%s]: response normal, resp=<%+v>",
+		rs.session.RemoteAddr(),
+		resp)
 }
