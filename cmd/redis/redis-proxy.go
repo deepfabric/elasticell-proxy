@@ -41,8 +41,10 @@ func main() {
 	go p.Start()
 
 	sig := <-sc
+
 	p.Stop()
 	log.Infof("exit: signal=<%d>.", sig)
+
 	switch sig {
 	case syscall.SIGTERM:
 		log.Infof("exit: bye :-).")
