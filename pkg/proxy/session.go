@@ -1,6 +1,8 @@
 package proxy
 
 import (
+	"sync/atomic"
+
 	"github.com/deepfabric/elasticell/pkg/log"
 	"github.com/deepfabric/elasticell/pkg/pb/raftcmdpb"
 	credis "github.com/deepfabric/elasticell/pkg/redis"
@@ -16,25 +18,34 @@ type redisSession struct {
 	session goetty.IOSession
 	respsCh chan *raftcmdpb.Response
 	retryCh chan *raftcmdpb.Request
+
+	lastRetries int
+	closed      int32
 }
 
 func newSession(session goetty.IOSession) *redisSession {
 	ctx, cancel := context.WithCancel(context.TODO())
 
 	return &redisSession{
-		ctx:     ctx,
-		cancel:  cancel,
-		session: session,
-		respsCh: make(chan *raftcmdpb.Response, 32),
-		retryCh: make(chan *raftcmdpb.Request, 1),
+		ctx:         ctx,
+		cancel:      cancel,
+		session:     session,
+		respsCh:     make(chan *raftcmdpb.Response, 32),
+		retryCh:     make(chan *raftcmdpb.Request, 1),
+		lastRetries: 0,
 	}
 }
 
 func (rs *redisSession) close() {
+	atomic.StoreInt32(&rs.closed, 1)
 	rs.cancel()
-	log.Infof("redis-[%s]: closed", rs.session.RemoteAddr())
 	close(rs.respsCh)
 	close(rs.retryCh)
+	log.Infof("redis-[%s]: closed", rs.session.RemoteAddr())
+}
+
+func (rs *redisSession) isClosed() bool {
+	return atomic.LoadInt32(&rs.closed) == 1
 }
 
 func (rs *redisSession) addToRetry(req *raftcmdpb.Request) {

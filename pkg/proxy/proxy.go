@@ -27,9 +27,9 @@ type RedisProxy struct {
 	pdClient        *pd.Client
 	supportCmds     map[string]struct{} // TODO: init
 	ranges          *util.CellTree
-	cellLeaderAddrs map[uint64]string            // cellid -> leader peer store addr
-	conns           map[string]*goetty.Connector // store addr -> netconn
-	routing         *routing                     // uuid -> session
+	cellLeaderAddrs map[uint64]string           // cellid -> leader peer store addr
+	conns           map[string]goetty.IOSession // store addr -> netconn
+	routing         *routing                    // uuid -> session
 	syncEpoch       uint64
 
 	stopOnce sync.Once
@@ -57,7 +57,7 @@ func NewRedisProxy(cfg *Cfg) *RedisProxy {
 		routing:         newRouting(),
 		ranges:          util.NewCellTree(),
 		cellLeaderAddrs: make(map[uint64]string),
-		conns:           make(map[string]*goetty.Connector),
+		conns:           make(map[string]goetty.IOSession),
 		stopC:           make(chan struct{}),
 	}
 }
@@ -188,15 +188,17 @@ func (p *RedisProxy) doConnection(session goetty.IOSession) error {
 			Epoch: p.getSyncEpoch(),
 		}
 
+		rs.lastRetries = 0
 		p.handleReq(rs, raftReq)
 	}
 }
 
 func (p *RedisProxy) handleReq(rs *redisSession, req *raftcmdpb.Request) {
 	var err error
-	retries := 0
+
 	for {
-		if retries >= p.cfg.MaxRetries {
+		if rs.lastRetries >= p.cfg.MaxRetries {
+			rs.lastRetries = 0
 			break
 		}
 
@@ -205,7 +207,7 @@ func (p *RedisProxy) handleReq(rs *redisSession, req *raftcmdpb.Request) {
 			log.Debugf("redis-[%s]: handle req, leader=<%s> times=<%d>",
 				rs.session.RemoteAddr(),
 				leader,
-				retries)
+				rs.lastRetries)
 		}
 
 		if leader == "" {
@@ -213,6 +215,7 @@ func (p *RedisProxy) handleReq(rs *redisSession, req *raftcmdpb.Request) {
 		} else {
 			err = p.forwardTo(leader, req, rs)
 			if err == nil {
+				rs.lastRetries++
 				break
 			}
 		}
@@ -221,15 +224,16 @@ func (p *RedisProxy) handleReq(rs *redisSession, req *raftcmdpb.Request) {
 		// update last range
 		p.refreshRanges()
 
-		retries++
+		rs.lastRetries++
 	}
 
 	if err != nil {
-		p.routing.delete(req.UUID)
-
 		log.Errorf("redis-[%s]: handle returns errors: %+v",
 			rs.session.RemoteAddr(),
 			err)
+
+		rs.lastRetries = 0
+		p.routing.delete(req.UUID)
 		rs.respError(err)
 	}
 }
@@ -261,7 +265,7 @@ func (p *RedisProxy) forwardTo(addr string, req *raftcmdpb.Request, rs *redisSes
 
 func (p *RedisProxy) onResp(rsp *raftcmdpb.Response) {
 	rs := p.routing.delete(rsp.UUID)
-	if rs != nil {
+	if rs != nil && !rs.isClosed() {
 		if rsp.Type == raftcmdpb.RaftError {
 			// we need sync cell,store and leader info from pd server, than retry this request
 			rs.addToRetry(rsp.OriginRequest)
@@ -269,6 +273,9 @@ func (p *RedisProxy) onResp(rsp *raftcmdpb.Response) {
 		}
 
 		rs.onResp(rsp)
+	} else {
+		log.Warnf("redis-resp: client maybe closed, ingore resp, uuid=<%+v>",
+			rsp.UUID)
 	}
 }
 

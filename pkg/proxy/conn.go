@@ -18,7 +18,7 @@ var (
 	tw = goetty.NewHashedTimeWheel(time.Millisecond*500, 60, 3)
 )
 
-func (p *RedisProxy) getConn(addr string) (*goetty.Connector, error) {
+func (p *RedisProxy) getConn(addr string) (goetty.IOSession, error) {
 	conn := p.getConnLocked(addr)
 	if p.checkConnect(addr, conn) {
 		return conn, nil
@@ -27,7 +27,7 @@ func (p *RedisProxy) getConn(addr string) (*goetty.Connector, error) {
 	return conn, errConnect
 }
 
-func (p *RedisProxy) getConnLocked(addr string) *goetty.Connector {
+func (p *RedisProxy) getConnLocked(addr string) goetty.IOSession {
 	p.RLock()
 	conn := p.conns[addr]
 	p.RUnlock()
@@ -39,7 +39,7 @@ func (p *RedisProxy) getConnLocked(addr string) *goetty.Connector {
 	return p.createConn(addr)
 }
 
-func (p *RedisProxy) createConn(addr string) *goetty.Connector {
+func (p *RedisProxy) createConn(addr string) goetty.IOSession {
 	p.Lock()
 
 	// double check
@@ -50,12 +50,11 @@ func (p *RedisProxy) createConn(addr string) *goetty.Connector {
 
 	conn := goetty.NewConnector(p.getConnectionCfg(addr), &redisDecoder{}, &redisEncoder{})
 	p.conns[addr] = conn
-	go p.loopReadFromBackendServer(addr, conn)
 	p.Unlock()
 	return conn
 }
 
-func (p *RedisProxy) loopReadFromBackendServer(addr string, conn *goetty.Connector) {
+func (p *RedisProxy) loopReadFromBackendServer(addr string, conn goetty.IOSession) {
 	for {
 		data, err := conn.Read()
 		if err != nil {
@@ -85,11 +84,11 @@ func (p *RedisProxy) getConnectionCfg(addr string) *goetty.Conf {
 
 }
 
-func (p *RedisProxy) onTimeIdle(addr string, conn *goetty.Connector) {
+func (p *RedisProxy) onTimeIdle(addr string, conn goetty.IOSession) {
 
 }
 
-func (p *RedisProxy) checkConnect(addr string, conn *goetty.Connector) bool {
+func (p *RedisProxy) checkConnect(addr string, conn goetty.IOSession) bool {
 	if nil == conn {
 		return false
 	}
