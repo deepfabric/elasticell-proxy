@@ -10,12 +10,8 @@ import (
 )
 
 var (
-	errConnect = errors.New("not connected")
-
+	errConnect            = errors.New("not connected")
 	defaultConnectTimeout = time.Second * 5
-	defaultWriteIdle      = time.Second * 30
-
-	tw = goetty.NewHashedTimeWheel(time.Millisecond*500, 60, 3)
 )
 
 func (p *RedisProxy) getConn(addr string) (goetty.IOSession, error) {
@@ -77,15 +73,7 @@ func (p *RedisProxy) getConnectionCfg(addr string) *goetty.Conf {
 	return &goetty.Conf{
 		Addr: addr,
 		TimeoutConnectToServer: defaultConnectTimeout,
-		TimeWheel:              tw,
-		TimeoutWrite:           defaultWriteIdle,
-		WriteTimeoutFn:         p.onTimeIdle,
 	}
-
-}
-
-func (p *RedisProxy) onTimeIdle(addr string, conn goetty.IOSession) {
-
 }
 
 func (p *RedisProxy) checkConnect(addr string, conn goetty.IOSession) bool {
