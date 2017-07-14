@@ -57,6 +57,14 @@ func (rs *redisSession) onResp(rsp *raftcmdpb.Response) {
 }
 
 func (rs *redisSession) retryLoop(p *RedisProxy) {
+	defer func() {
+		if err := recover(); err != nil {
+			log.Errorf("redis-[%s]: retry loop panic, errors:\n%+v",
+				rs.session.RemoteAddr(),
+				err)
+		}
+	}()
+
 	for {
 		select {
 		case <-rs.ctx.Done():
@@ -67,14 +75,21 @@ func (rs *redisSession) retryLoop(p *RedisProxy) {
 					p.refreshRanges()
 				}
 
-				// already refresh, direct to retry
-				p.handleReq(rs, req)
+				p.addToForward(rs, req)
 			}
 		}
 	}
 }
 
 func (rs *redisSession) writeLoop() {
+	defer func() {
+		if err := recover(); err != nil {
+			log.Errorf("redis-[%s]: write loop panic, errors:\n%+v",
+				rs.session.RemoteAddr(),
+				err)
+		}
+	}()
+
 	for {
 		select {
 		case <-rs.ctx.Done():

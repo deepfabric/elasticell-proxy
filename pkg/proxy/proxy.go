@@ -18,6 +18,15 @@ import (
 	"golang.org/x/net/context"
 )
 
+const (
+	defaultChanSize = 1024
+)
+
+type req struct {
+	rs      *redisSession
+	raftReq *raftcmdpb.Request
+}
+
 // RedisProxy is a redis proxy
 type RedisProxy struct {
 	sync.RWMutex
@@ -31,7 +40,9 @@ type RedisProxy struct {
 	conns           map[string]goetty.IOSession // store addr -> netconn
 	routing         *routing                    // uuid -> session
 	syncEpoch       uint64
+	reqs            chan *req
 
+	cancel   context.CancelFunc
 	stopOnce sync.Once
 	stopWG   sync.WaitGroup
 	stopC    chan struct{}
@@ -59,6 +70,7 @@ func NewRedisProxy(cfg *Cfg) *RedisProxy {
 		cellLeaderAddrs: make(map[uint64]string),
 		conns:           make(map[string]goetty.IOSession),
 		stopC:           make(chan struct{}),
+		reqs:            make(chan *req, defaultChanSize),
 	}
 }
 
@@ -67,6 +79,11 @@ func (p *RedisProxy) Start() error {
 	go p.listenToStop()
 
 	p.init()
+
+	ctx, cancel := context.WithCancel(context.TODO())
+	go p.readyToHandleRedisCommand(ctx)
+	p.cancel = cancel
+
 	return p.svr.Start(p.doConnection)
 }
 
@@ -87,16 +104,15 @@ func (p *RedisProxy) doStop() {
 		defer p.stopWG.Done()
 
 		log.Infof("stop: start to stop redis proxy")
-
-		p.Lock()
 		for addr, conn := range p.conns {
 			conn.Close()
 			log.Infof("stop: store connection closed, addr=<%s>", addr)
 		}
-		p.Unlock()
 
 		p.svr.Stop()
 		log.Infof("stop: tcp listen stopped")
+
+		p.cancel()
 	})
 }
 
@@ -152,6 +168,14 @@ func (p *RedisProxy) doConnection(session goetty.IOSession) error {
 	addr := session.RemoteAddr()
 	log.Infof("redis-[%s]: connected", addr)
 
+	defer func() {
+		if err := recover(); err != nil {
+			log.Errorf("redis-[%s]: read loop panic, errors:\n%+v",
+				addr,
+				err)
+		}
+	}()
+
 	// every client has 3 goroutines, read,write,retry
 	rs := newSession(session)
 	go rs.writeLoop()
@@ -159,7 +183,7 @@ func (p *RedisProxy) doConnection(session goetty.IOSession) error {
 	defer rs.close()
 
 	for {
-		req, err := session.Read()
+		r, err := session.Read()
 		if err != nil {
 			if err == io.EOF {
 				return nil
@@ -171,7 +195,7 @@ func (p *RedisProxy) doConnection(session goetty.IOSession) error {
 			return err
 		}
 
-		cmd := req.(redis.Command)
+		cmd := r.(redis.Command)
 		if log.DebugEnabled() {
 			log.Debugf("redis-[%s]: read a cmd: %s", addr, cmd.ToString())
 		}
@@ -189,13 +213,35 @@ func (p *RedisProxy) doConnection(session goetty.IOSession) error {
 		}
 
 		rs.lastRetries = 0
-		p.handleReq(rs, raftReq)
+
+		p.addToForward(rs, raftReq)
+	}
+}
+
+func (p *RedisProxy) addToForward(rs *redisSession, raftReq *raftcmdpb.Request) {
+	p.reqs <- &req{
+		rs:      rs,
+		raftReq: raftReq,
+	}
+}
+
+func (p *RedisProxy) readyToHandleRedisCommand(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			close(p.reqs)
+			log.Infof("stop: handle redis command stopped")
+			return
+		case req := <-p.reqs:
+			if req != nil {
+				p.handleReq(req.rs, req.raftReq)
+			}
+		}
 	}
 }
 
 func (p *RedisProxy) handleReq(rs *redisSession, req *raftcmdpb.Request) {
 	var err error
-
 	for {
 		if rs.lastRetries >= p.cfg.MaxRetries {
 			rs.lastRetries = 0

@@ -51,6 +51,14 @@ func (p *RedisProxy) createConn(addr string) goetty.IOSession {
 }
 
 func (p *RedisProxy) loopReadFromBackendServer(addr string, conn goetty.IOSession) {
+	defer func() {
+		if err := recover(); err != nil {
+			log.Errorf("backend-[%s]: read loop panic, errors:\n%+v",
+				addr,
+				err)
+		}
+	}()
+
 	for {
 		data, err := conn.Read()
 		if err != nil {
@@ -81,7 +89,9 @@ func (p *RedisProxy) checkConnect(addr string, conn goetty.IOSession) bool {
 		return false
 	}
 
+	p.Lock()
 	if conn.IsConnected() {
+		p.Unlock()
 		return true
 	}
 
@@ -90,9 +100,11 @@ func (p *RedisProxy) checkConnect(addr string, conn goetty.IOSession) bool {
 		log.Errorf("transport: connect to store failure, target=<%s> errors:\n %+v",
 			addr,
 			err)
+		p.Unlock()
 		return false
 	}
 
 	go p.loopReadFromBackendServer(addr, conn)
+	p.Unlock()
 	return ok
 }
