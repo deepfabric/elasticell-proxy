@@ -8,6 +8,7 @@
     "maxRetries": 3,
     "retryDuration": 2000,
     "supportCMDs": [
+        "ping",
         "set",
         "get",
         "mset",

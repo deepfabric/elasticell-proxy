@@ -37,11 +37,13 @@ func newSession(session goetty.IOSession) *redisSession {
 }
 
 func (rs *redisSession) close() {
-	atomic.StoreInt32(&rs.closed, 1)
-	rs.cancel()
-	close(rs.respsCh)
-	close(rs.retryCh)
-	log.Infof("redis-[%s]: closed", rs.session.RemoteAddr())
+	if !rs.isClosed() {
+		atomic.StoreInt32(&rs.closed, 1)
+		rs.cancel()
+		close(rs.respsCh)
+		close(rs.retryCh)
+		log.Infof("redis-[%s]: closed", rs.session.RemoteAddr())
+	}
 }
 
 func (rs *redisSession) isClosed() bool {
@@ -57,24 +59,12 @@ func (rs *redisSession) onResp(rsp *raftcmdpb.Response) {
 }
 
 func (rs *redisSession) retryLoop(p *RedisProxy) {
-	defer func() {
-		if err := recover(); err != nil {
-			log.Errorf("redis-[%s]: retry loop panic, errors:\n%+v",
-				rs.session.RemoteAddr(),
-				err)
-		}
-	}()
-
 	for {
 		select {
 		case <-rs.ctx.Done():
 			return
 		case req := <-rs.retryCh:
 			if req != nil {
-				if req.Epoch >= p.getSyncEpoch() {
-					p.refreshRanges()
-				}
-
 				p.addToForward(rs, req)
 			}
 		}
@@ -82,14 +72,6 @@ func (rs *redisSession) retryLoop(p *RedisProxy) {
 }
 
 func (rs *redisSession) writeLoop() {
-	defer func() {
-		if err := recover(); err != nil {
-			log.Errorf("redis-[%s]: write loop panic, errors:\n%+v",
-				rs.session.RemoteAddr(),
-				err)
-		}
-	}()
-
 	for {
 		select {
 		case <-rs.ctx.Done():

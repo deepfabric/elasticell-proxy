@@ -4,9 +4,11 @@ import (
 	"fmt"
 	"io"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/deepfabric/elasticell/pkg/log"
+	"github.com/deepfabric/elasticell/pkg/pb/metapb"
 	"github.com/deepfabric/elasticell/pkg/pb/pdpb"
 	"github.com/deepfabric/elasticell/pkg/pb/raftcmdpb"
 	"github.com/deepfabric/elasticell/pkg/pd"
@@ -22,6 +24,12 @@ const (
 	defaultChanSize = 1024
 )
 
+var (
+	pingReq = &raftcmdpb.Request{
+		Cmd: [][]byte{[]byte("ping")},
+	}
+)
+
 type req struct {
 	rs      *redisSession
 	raftReq *raftcmdpb.Request
@@ -34,13 +42,14 @@ type RedisProxy struct {
 	cfg             *Cfg
 	svr             *goetty.Server
 	pdClient        *pd.Client
-	supportCmds     map[string]struct{} // TODO: init
+	supportCmds     map[string]struct{}
 	ranges          *util.CellTree
 	cellLeaderAddrs map[uint64]string           // cellid -> leader peer store addr
 	conns           map[string]goetty.IOSession // store addr -> netconn
 	routing         *routing                    // uuid -> session
 	syncEpoch       uint64
 	reqs            chan *req
+	pings           chan string
 
 	cancel   context.CancelFunc
 	stopOnce sync.Once
@@ -71,6 +80,7 @@ func NewRedisProxy(cfg *Cfg) *RedisProxy {
 		conns:           make(map[string]goetty.IOSession),
 		stopC:           make(chan struct{}),
 		reqs:            make(chan *req, defaultChanSize),
+		pings:           make(chan string, defaultChanSize),
 	}
 }
 
@@ -125,18 +135,16 @@ func (p *RedisProxy) init() {
 }
 
 func (p *RedisProxy) getSyncEpoch() uint64 {
-	p.RLock()
-	v := p.syncEpoch
-	p.RUnlock()
-
-	return v
+	return atomic.LoadUint64(&p.syncEpoch)
 }
 
 func (p *RedisProxy) refreshRanges() {
 	old := p.getSyncEpoch()
+	log.Infof("pd-sync: try to sync, epoch=<%d>", old)
 
 	p.Lock()
 	if old < p.syncEpoch {
+		log.Infof("pd-sync: already sync, skip, old=<%d> new=<%d>", old, p.syncEpoch)
 		p.Unlock()
 		return
 	}
@@ -167,14 +175,6 @@ func (p *RedisProxy) clean() {
 func (p *RedisProxy) doConnection(session goetty.IOSession) error {
 	addr := session.RemoteAddr()
 	log.Infof("redis-[%s]: connected", addr)
-
-	defer func() {
-		if err := recover(); err != nil {
-			log.Errorf("redis-[%s]: read loop panic, errors:\n%+v",
-				addr,
-				err)
-		}
-	}()
 
 	// every client has 3 goroutines, read,write,retry
 	rs := newSession(session)
@@ -218,6 +218,10 @@ func (p *RedisProxy) doConnection(session goetty.IOSession) error {
 	}
 }
 
+func (p *RedisProxy) addToPing(target string) {
+	p.pings <- target
+}
+
 func (p *RedisProxy) addToForward(rs *redisSession, raftReq *raftcmdpb.Request) {
 	p.reqs <- &req{
 		rs:      rs,
@@ -230,11 +234,16 @@ func (p *RedisProxy) readyToHandleRedisCommand(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			close(p.reqs)
+			close(p.pings)
 			log.Infof("stop: handle redis command stopped")
 			return
 		case req := <-p.reqs:
 			if req != nil {
 				p.handleReq(req.rs, req.raftReq)
+			}
+		case target := <-p.pings:
+			if target != "" {
+				p.forwardTo(target, pingReq, nil)
 			}
 		}
 	}
@@ -248,18 +257,25 @@ func (p *RedisProxy) handleReq(rs *redisSession, req *raftcmdpb.Request) {
 			break
 		}
 
-		leader := p.getLeaderStoreAddr(req.Cmd[1])
+		target := ""
+
+		if len(req.Cmd) <= 1 {
+			target = p.getRandomStoreAddr()
+		} else {
+			target = p.getLeaderStoreAddr(req.Cmd[1])
+		}
+
 		if log.DebugEnabled() {
 			log.Debugf("redis-[%s]: handle req, leader=<%s> times=<%d>",
 				rs.session.RemoteAddr(),
-				leader,
+				target,
 				rs.lastRetries)
 		}
 
-		if leader == "" {
+		if target == "" {
 			err = fmt.Errorf("leader not found for key: %v", req.Cmd[1])
 		} else {
-			err = p.forwardTo(leader, req, rs)
+			err = p.forwardTo(target, req, rs)
 			if err == nil {
 				rs.lastRetries++
 				break
@@ -297,15 +313,17 @@ func (p *RedisProxy) forwardTo(addr string, req *raftcmdpb.Request, rs *redisSes
 		return errors.Wrapf(err, "writeTo")
 	}
 
-	if log.DebugEnabled() {
-		log.Debugf("redis-[%s]: write to, to=<%s> epoch=<%d> uuid=<%v>",
-			rs.session.RemoteAddr(),
-			addr,
-			req.Epoch,
-			req.UUID)
+	if nil != rs {
+		if log.DebugEnabled() {
+			log.Debugf("redis-[%s]: write to, to=<%s> epoch=<%d> uuid=<%v>",
+				rs.session.RemoteAddr(),
+				addr,
+				req.Epoch,
+				req.UUID)
+		}
+		p.routing.put(req.UUID, rs)
 	}
 
-	p.routing.put(req.UUID, rs)
 	return nil
 }
 
@@ -313,13 +331,12 @@ func (p *RedisProxy) onResp(rsp *raftcmdpb.Response) {
 	rs := p.routing.delete(rsp.UUID)
 	if rs != nil && !rs.isClosed() {
 		if rsp.Type == raftcmdpb.RaftError {
-			// we need sync cell,store and leader info from pd server, than retry this request
 			rs.addToRetry(rsp.OriginRequest)
 			return
 		}
 
 		rs.onResp(rsp)
-	} else {
+	} else if len(rsp.UUID) > 0 {
 		log.Warnf("redis-resp: client maybe closed, ingore resp, uuid=<%+v>",
 			rsp.UUID)
 	}
@@ -329,6 +346,19 @@ func (p *RedisProxy) getLeaderStoreAddr(key []byte) string {
 	p.RLock()
 	cell := p.ranges.Search(key)
 	addr := p.cellLeaderAddrs[cell.ID]
+	p.RUnlock()
+
+	return addr
+}
+
+func (p *RedisProxy) getRandomStoreAddr() string {
+	p.RLock()
+	var target *metapb.Cell
+	p.ranges.Ascend(func(cell *metapb.Cell) bool {
+		target = cell
+		return false
+	})
+	addr := p.cellLeaderAddrs[target.ID]
 	p.RUnlock()
 
 	return addr

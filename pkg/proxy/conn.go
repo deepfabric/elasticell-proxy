@@ -51,36 +51,42 @@ func (p *RedisProxy) createConn(addr string) goetty.IOSession {
 }
 
 func (p *RedisProxy) loopReadFromBackendServer(addr string, conn goetty.IOSession) {
-	defer func() {
-		if err := recover(); err != nil {
-			log.Errorf("backend-[%s]: read loop panic, errors:\n%+v",
-				addr,
-				err)
-		}
-	}()
-
 	for {
-		data, err := conn.Read()
+		data, err := conn.ReadTimeout(time.Second * 5)
 		if err != nil {
 			conn.Close()
 			return
 		}
 
 		rsp, ok := data.(*raftcmdpb.Response)
-		if ok {
+		if ok && len(rsp.UUID) > 0 {
 			log.Debugf("backend-[%s]: read a response: uuid=<%+v> resp=<%+v>",
 				addr,
 				rsp.UUID,
 				rsp)
+			// we need sync cell,store and leader info from pd server, than retry this request
+			if rsp.Type == raftcmdpb.RaftError &&
+				rsp.OriginRequest != nil &&
+				rsp.OriginRequest.Epoch >= p.getSyncEpoch() {
+				p.refreshRanges()
+			}
+
 			p.onResp(rsp)
 		}
 	}
+}
+
+func (p *RedisProxy) sendHeartbeat(addr string, session goetty.IOSession) {
+	p.addToPing(addr)
 }
 
 func (p *RedisProxy) getConnectionCfg(addr string) *goetty.Conf {
 	return &goetty.Conf{
 		Addr: addr,
 		TimeoutConnectToServer: defaultConnectTimeout,
+		TimeoutWrite:           time.Second,
+		WriteTimeoutFn:         p.sendHeartbeat,
+		TimeWheel:              goetty.NewTimeoutWheel(goetty.WithTickInterval(time.Millisecond * 500)),
 	}
 }
 
