@@ -19,6 +19,7 @@ type redisSession struct {
 	respsCh chan *raftcmdpb.Response
 	retryCh chan *raftcmdpb.Request
 
+	addr        string
 	lastRetries int
 	closed      int32
 }
@@ -33,6 +34,7 @@ func newSession(session goetty.IOSession) *redisSession {
 		respsCh:     make(chan *raftcmdpb.Response, 32),
 		retryCh:     make(chan *raftcmdpb.Request, 1),
 		lastRetries: 0,
+		addr:        session.RemoteAddr(),
 	}
 }
 
@@ -42,7 +44,7 @@ func (rs *redisSession) close() {
 		rs.cancel()
 		close(rs.respsCh)
 		close(rs.retryCh)
-		log.Infof("redis-[%s]: closed", rs.session.RemoteAddr())
+		log.Infof("redis-[%s]: closed", rs.addr)
 	}
 }
 
@@ -90,7 +92,7 @@ func (rs *redisSession) respError(err error) {
 	rs.session.WriteOutBuf()
 
 	log.Debugf("redis-[%s]: response error, err=<%+v>",
-		rs.session.RemoteAddr(),
+		rs.addr,
 		err)
 }
 
@@ -134,6 +136,6 @@ func (rs *redisSession) doResp(resp *raftcmdpb.Response) {
 	rs.session.WriteOutBuf()
 
 	log.Debugf("redis-[%s]: response normal, resp=<%+v>",
-		rs.session.RemoteAddr(),
+		rs.addr,
 		resp)
 }
