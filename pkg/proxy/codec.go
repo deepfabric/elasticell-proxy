@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/deepfabric/elasticell/pkg/log"
 	"github.com/deepfabric/elasticell/pkg/pb/raftcmdpb"
 	"github.com/deepfabric/elasticell/pkg/util"
 	"github.com/fagongzi/goetty"
@@ -47,9 +48,13 @@ type redisEncoder struct {
 
 func (encoder *redisEncoder) Encode(data interface{}, out *goetty.ByteBuf) error {
 	req := data.(*raftcmdpb.Request)
+	return writeRaftRequest(req, out)
+}
+
+func writeRaftRequest(req *raftcmdpb.Request, out *goetty.ByteBuf) error {
 	value, err := req.Marshal()
 	if err != nil {
-		return err
+		log.Fatalf("bug: marshal error, req=<%d> errors:%+v\n", req, err)
 	}
 
 	out.WriteByte(ProxyBegin)

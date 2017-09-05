@@ -7,6 +7,7 @@
     ],
     "maxRetries": 3,
     "retryDuration": 2000,
+    "workerCount": 64,
     "supportCMDs": [
         "ping",
         "set",

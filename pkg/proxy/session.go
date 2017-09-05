@@ -3,47 +3,35 @@ package proxy
 import (
 	"sync/atomic"
 
+	"github.com/Workiva/go-datastructures/queue"
 	"github.com/deepfabric/elasticell/pkg/log"
 	"github.com/deepfabric/elasticell/pkg/pb/raftcmdpb"
 	credis "github.com/deepfabric/elasticell/pkg/redis"
 	"github.com/deepfabric/elasticell/pkg/util"
 	"github.com/fagongzi/goetty"
 	"github.com/fagongzi/goetty/protocol/redis"
-	"golang.org/x/net/context"
 )
 
 type redisSession struct {
-	ctx     context.Context
-	cancel  context.CancelFunc
 	session goetty.IOSession
-	respsCh chan *raftcmdpb.Response
-	retryCh chan *raftcmdpb.Request
+	resps   *queue.Queue
 
-	addr        string
-	lastRetries int
-	closed      int32
+	addr   string
+	closed int32
 }
 
 func newSession(session goetty.IOSession) *redisSession {
-	ctx, cancel := context.WithCancel(context.TODO())
-
 	return &redisSession{
-		ctx:         ctx,
-		cancel:      cancel,
-		session:     session,
-		respsCh:     make(chan *raftcmdpb.Response, 32),
-		retryCh:     make(chan *raftcmdpb.Request, 1),
-		lastRetries: 0,
-		addr:        session.RemoteAddr(),
+		session: session,
+		resps:   &queue.Queue{},
+		addr:    session.RemoteAddr(),
 	}
 }
 
 func (rs *redisSession) close() {
 	if !rs.isClosed() {
 		atomic.StoreInt32(&rs.closed, 1)
-		rs.cancel()
-		close(rs.respsCh)
-		close(rs.retryCh)
+		rs.resps.Dispose()
 		log.Infof("redis-[%s]: closed", rs.addr)
 	}
 }
@@ -52,53 +40,34 @@ func (rs *redisSession) isClosed() bool {
 	return atomic.LoadInt32(&rs.closed) == 1
 }
 
-func (rs *redisSession) addToRetry(req *raftcmdpb.Request) {
-	rs.retryCh <- req
-}
-
-func (rs *redisSession) onResp(rsp *raftcmdpb.Response) {
-	rs.respsCh <- rsp
-}
-
-func (rs *redisSession) retryLoop(p *RedisProxy) {
-	for {
-		select {
-		case <-rs.ctx.Done():
-			return
-		case req := <-rs.retryCh:
-			if req != nil {
-				p.addToForward(rs, req)
-			}
-		}
+func (rs *redisSession) resp(rsp *raftcmdpb.Response) {
+	if rs != nil && !rs.isClosed() {
+		rs.resps.Put(rsp)
 	}
+}
+
+func (rs *redisSession) errorResp(err error) {
+	rs.resp(&raftcmdpb.Response{
+		ErrorResult: util.StringToSlice(err.Error()),
+	})
 }
 
 func (rs *redisSession) writeLoop() {
 	for {
-		select {
-		case <-rs.ctx.Done():
+		resps, err := rs.resps.Get(batch)
+		if nil != err {
 			return
-		case resp := <-rs.respsCh:
-			if resp != nil {
-				rs.doResp(resp)
-			}
 		}
+
+		buf := rs.session.OutBuf()
+		for _, resp := range resps {
+			rs.doResp(resp.(*raftcmdpb.Response), buf)
+		}
+		rs.session.WriteOutBuf()
 	}
 }
 
-func (rs *redisSession) respError(err error) {
-	buf := rs.session.OutBuf()
-	redis.WriteError(util.StringToSlice(err.Error()), buf)
-	rs.session.WriteOutBuf()
-
-	log.Debugf("redis-[%s]: response error, err=<%+v>",
-		rs.addr,
-		err)
-}
-
-func (rs *redisSession) doResp(resp *raftcmdpb.Response) {
-	buf := rs.session.OutBuf()
-
+func (rs *redisSession) doResp(resp *raftcmdpb.Response, buf *goetty.ByteBuf) {
 	if resp.ErrorResult != nil {
 		redis.WriteError(resp.ErrorResult, buf)
 	}
@@ -132,8 +101,6 @@ func (rs *redisSession) doResp(resp *raftcmdpb.Response) {
 	if resp.StatusResult != nil {
 		redis.WriteStatus(resp.StatusResult, buf)
 	}
-
-	rs.session.WriteOutBuf()
 
 	log.Debugf("redis-[%s]: response normal, resp=<%+v>",
 		rs.addr,

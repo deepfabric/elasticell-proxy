@@ -14,16 +14,16 @@ const (
 
 type routingMap struct {
 	sync.RWMutex
-	m map[string]*redisSession
+	m map[string]*req
 }
 
-func (m *routingMap) put(key string, value *redisSession) {
+func (m *routingMap) put(key string, value *req) {
 	m.Lock()
 	m.m[key] = value
 	m.Unlock()
 }
 
-func (m *routingMap) delete(key string) *redisSession {
+func (m *routingMap) delete(key string) *req {
 	m.Lock()
 	value := m.m[key]
 	delete(m.m, key)
@@ -43,18 +43,18 @@ func newRouting() *routing {
 
 	for i := 0; i < bucketSize; i++ {
 		r.rms[i] = &routingMap{
-			m: make(map[string]*redisSession),
+			m: make(map[string]*req),
 		}
 	}
 
 	return r
 }
 
-func (r *routing) put(uuid []byte, value *redisSession) {
+func (r *routing) put(uuid []byte, value *req) {
 	r.rms[getIndex(uuid)].put(util.SliceToString(uuid), value)
 }
 
-func (r *routing) delete(uuid []byte) *redisSession {
+func (r *routing) delete(uuid []byte) *req {
 	return r.rms[getIndex(uuid)].delete(util.SliceToString(uuid))
 }
 
