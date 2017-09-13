@@ -4,11 +4,13 @@ import (
 	"fmt"
 	"hash/crc32"
 	"io"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/Workiva/go-datastructures/queue"
+	"github.com/deepfabric/discovery"
 	"github.com/deepfabric/elasticell/pkg/log"
 	"github.com/deepfabric/elasticell/pkg/pb/metapb"
 	"github.com/deepfabric/elasticell/pkg/pb/pdpb"
@@ -18,8 +20,10 @@ import (
 	"github.com/deepfabric/elasticell/pkg/util/uuid"
 	"github.com/fagongzi/goetty"
 	"github.com/fagongzi/goetty/protocol/redis"
+	"github.com/kr/pretty"
 	"github.com/pkg/errors"
 	"golang.org/x/net/context"
+	"google.golang.org/grpc/naming"
 )
 
 const (
@@ -66,6 +70,7 @@ type RedisProxy struct {
 	reqs            []*queue.Queue
 	retries         *queue.Queue
 	pings           chan string
+	watcher         *discovery.EtcdWatcher
 
 	ctx      context.Context
 	cancel   context.CancelFunc
@@ -76,7 +81,9 @@ type RedisProxy struct {
 
 // NewRedisProxy returns a redisp proxy
 func NewRedisProxy(cfg *Cfg) *RedisProxy {
-	client, err := pd.NewClient(fmt.Sprintf("proxy-%s", cfg.Addr), cfg.PDAddrs...)
+	var err error
+	var client *pd.Client
+	client, err = pd.NewClient(fmt.Sprintf("proxy-%s", cfg.Addr), cfg.PDAddrs...)
 	if err != nil {
 		log.Fatalf("bootstrap: create pd client failed, errors:\n%+v", err)
 	}
@@ -101,6 +108,11 @@ func NewRedisProxy(cfg *Cfg) *RedisProxy {
 		pings:           make(chan string),
 	}
 
+	p.watcher, err = discovery.NewEtcdWatcher("/elasticell", "query", cfg.PDAddrs)
+	if err != nil {
+		log.Fatalf("bootstrap: create etcd watcher failed, errors:\n%+v", err)
+	}
+
 	for index := 0; index < cfg.WorkerCount; index++ {
 		p.reqs[index] = &queue.Queue{}
 	}
@@ -116,6 +128,31 @@ func (p *RedisProxy) Start() error {
 	go p.readyToHandleReq(p.ctx)
 
 	return p.svr.Start(p.doConnection)
+}
+
+func (p *RedisProxy) watchLoop() {
+	var err error
+	var updates []*naming.Update
+	for {
+		if updates, err = p.watcher.Next(); err != nil {
+			log.Infof("watchLoop quited due to error:\n%+v", err)
+			return
+		}
+		if len(updates) == 0 {
+			continue
+		}
+		log.Infof("watchLoop updates: %# v", pretty.Formatter(updates))
+		for _, u := range updates {
+			switch u.Op {
+			case naming.Add:
+				_ = p.getConnLocked(u.Addr)
+			case naming.Delete:
+				p.closeConn(u.Addr)
+			default:
+				log.Fatalf("watchLoop unrecognized update op: %v", u.Op)
+			}
+		}
+	}
 }
 
 // Stop stop the proxy
@@ -349,6 +386,8 @@ func (p *RedisProxy) handleReq(r *req) {
 
 	if len(r.raftReq.Cmd) <= 1 {
 		target = p.getRandomStoreAddr()
+	} else if strings.ToLower(string(r.raftReq.Cmd[0])) == "query" {
+
 	} else {
 		target, cellID = p.getLeaderStoreAddr(r.raftReq.Cmd[1])
 	}

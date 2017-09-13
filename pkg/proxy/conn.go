@@ -135,6 +135,16 @@ func (bc *backend) writeLoop() {
 	}
 }
 
+func (p *RedisProxy) closeConn(addr string) {
+	p.RLock()
+	bc := p.bcs[addr]
+	if bc != nil {
+		bc.close()
+		delete(p.bcs, addr)
+	}
+	p.RUnlock()
+}
+
 func (p *RedisProxy) getConn(addr string) (*backend, error) {
 	bc := p.getConnLocked(addr)
 	if p.checkConnect(addr, bc) {

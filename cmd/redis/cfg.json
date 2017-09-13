@@ -47,6 +47,7 @@
         "lrem",
         "lset",
         "ltrim",
+        "query",
         "rpop",
         "rpoplpush",
         "rpush",
