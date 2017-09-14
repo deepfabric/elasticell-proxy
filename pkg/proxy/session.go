@@ -99,6 +99,10 @@ func (rs *redisSession) doResp(resp *raftcmdpb.Response, buf *goetty.ByteBuf) {
 		redis.WriteStatus(resp.StatusResult, buf)
 	}
 
+	if resp.DocArrayResult != nil || resp.HasEmptyDocArrayResult != nil {
+		credis.WriteDocArray(resp.DocArrayResult, buf)
+	}
+
 	log.Debugf("redis-[%s]: response normal, resp=<%+v>",
 		rs.addr,
 		resp)

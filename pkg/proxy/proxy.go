@@ -4,7 +4,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"sort"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/deepfabric/elasticell/pkg/codec"
@@ -72,6 +75,8 @@ type RedisProxy struct {
 	reqs            []*util.Queue
 	retries         *util.Queue
 	pings           chan string
+	bcAddrs         []string // store addrs
+	rrNext          int64    // round robin of bcAddrs
 
 	ctx      context.Context
 	cancel   context.CancelFunc
@@ -112,6 +117,7 @@ func NewRedisProxy(cfg *Cfg) *RedisProxy {
 		reqs:            make([]*util.Queue, cfg.WorkerCount),
 		retries:         &util.Queue{},
 		pings:           make(chan string),
+		bcAddrs:         make([]string, 0),
 	}
 
 	for index := uint64(0); index < cfg.WorkerCount; index++ {
@@ -127,6 +133,7 @@ func NewRedisProxy(cfg *Cfg) *RedisProxy {
 func (p *RedisProxy) Start() error {
 	go p.listenToStop()
 	go p.readyToHandleReq(p.ctx)
+	go p.refreshStoresLoop()
 
 	return p.svr.Start(p.doConnection)
 }
@@ -228,6 +235,34 @@ func (p *RedisProxy) init() {
 	}
 
 	p.refreshRanges()
+	p.refreshStores()
+}
+
+func (p *RedisProxy) refreshStores() {
+	var stores []string
+	var rsp *pdpb.ListStoreRsp
+	var err error
+	if rsp, err = p.pdClient.ListStore(context.TODO(), &pdpb.ListStoreReq{}); err != nil {
+		log.Errorf("ListStore failed with error\n%+v", err)
+	}
+	stores = make([]string, 0)
+	for _, s := range rsp.Stores {
+		stores = append(stores, s.ClientAddress)
+	}
+	sort.Strings(stores)
+	p.Lock()
+	p.bcAddrs = stores
+	p.Unlock()
+}
+
+func (p *RedisProxy) refreshStoresLoop() {
+	tickChan := time.Tick(10 * time.Second)
+	for {
+		select {
+		case <-tickChan:
+			p.refreshStores()
+		}
+	}
 }
 
 func (p *RedisProxy) getSyncEpoch() uint64 {
@@ -278,7 +313,6 @@ func (p *RedisProxy) refreshRanges() {
 func (p *RedisProxy) clean() {
 	p.stores = make(map[uint64]*metapb.Store)
 	p.cellLeaderAddrs = make(map[uint64]string)
-	p.ranges = util.NewCellTree()
 }
 
 func (p *RedisProxy) resetLocalOffset(offset uint64) {
@@ -525,16 +559,19 @@ func (p *RedisProxy) handleReq(r *req) {
 
 	if len(r.raftReq.Cmd) <= 1 {
 		target = p.getRandomStoreAddr()
+	} else if strings.ToLower(string(r.raftReq.Cmd[0])) == "query" {
+		target = p.getRRStoreAddr()
 	} else {
 		target, cellID = p.getLeaderStoreAddr(r.raftReq.Cmd[1])
 	}
 
 	if log.DebugEnabled() {
-		log.Debugf("req: handle req, uuid=<%+v>, cell=<%d>, bc=<%s> times=<%d> ",
+		log.Debugf("req: handle req, uuid=<%+v>, cell=<%d>, bc=<%s> times=<%d> cmd=<%v>",
 			r.raftReq.UUID,
 			cellID,
 			target,
-			r.retries)
+			r.retries,
+			r.raftReq.Cmd)
 	}
 
 	if target == "" {
@@ -618,4 +655,21 @@ func (p *RedisProxy) getRandomStoreAddr() string {
 	p.RUnlock()
 
 	return addr
+}
+
+func (p *RedisProxy) getRRStoreAddr() (target string) {
+	p.RLock()
+	total := int64(len(p.bcAddrs))
+	if total == 0 {
+		p.RUnlock()
+		return
+	}
+	idx := atomic.AddInt64(&p.rrNext, 1) - 1
+	if idx >= total {
+		idx %= total
+	}
+	target = p.bcAddrs[idx]
+	p.RUnlock()
+	log.Debugf("getRRStoreAddr picked #%d of %v", idx, p.bcAddrs)
+	return
 }
