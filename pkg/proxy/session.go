@@ -1,7 +1,7 @@
 package proxy
 
 import (
-	"sync/atomic"
+	"sync"
 
 	"github.com/Workiva/go-datastructures/queue"
 	"github.com/deepfabric/elasticell/pkg/log"
@@ -13,11 +13,11 @@ import (
 )
 
 type redisSession struct {
+	sync.RWMutex
+
 	session goetty.IOSession
 	resps   *queue.Queue
-
-	addr   string
-	closed int32
+	addr    string
 }
 
 func newSession(session goetty.IOSession) *redisSession {
@@ -29,21 +29,14 @@ func newSession(session goetty.IOSession) *redisSession {
 }
 
 func (rs *redisSession) close() {
-	if !rs.isClosed() {
-		atomic.StoreInt32(&rs.closed, 1)
-		rs.resps.Dispose()
-		log.Infof("redis-[%s]: closed", rs.addr)
-	}
-}
-
-func (rs *redisSession) isClosed() bool {
-	return atomic.LoadInt32(&rs.closed) == 1
+	rs.Lock()
+	rs.resps.Dispose()
+	log.Infof("redis-[%s]: closed", rs.addr)
+	rs.Unlock()
 }
 
 func (rs *redisSession) resp(rsp *raftcmdpb.Response) {
-	if rs != nil && !rs.isClosed() {
-		rs.resps.Put(rsp)
-	}
+	rs.resps.Put(rsp)
 }
 
 func (rs *redisSession) errorResp(err error) {
@@ -54,8 +47,10 @@ func (rs *redisSession) errorResp(err error) {
 
 func (rs *redisSession) writeLoop() {
 	for {
+		rs.RLock()
 		resps, err := rs.resps.Get(batch)
 		if nil != err {
+			rs.RUnlock()
 			return
 		}
 
@@ -64,6 +59,7 @@ func (rs *redisSession) writeLoop() {
 			rs.doResp(resp.(*raftcmdpb.Response), buf)
 		}
 		rs.session.WriteOutBuf()
+		rs.RUnlock()
 	}
 }
 

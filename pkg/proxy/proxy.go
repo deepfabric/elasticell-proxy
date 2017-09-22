@@ -39,13 +39,13 @@ type req struct {
 }
 
 func (r *req) errorDone(err error) {
-	if r.rs != nil && !r.rs.isClosed() {
+	if r.rs != nil {
 		r.rs.errorResp(err)
 	}
 }
 
 func (r *req) done(rsp *raftcmdpb.Response) {
-	if r.rs != nil && !r.rs.isClosed() {
+	if r.rs != nil {
 		r.rs.resp(rsp)
 	}
 }
