@@ -8,7 +8,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/Workiva/go-datastructures/queue"
 	"github.com/deepfabric/elasticell/pkg/log"
 	"github.com/deepfabric/elasticell/pkg/pb/metapb"
 	"github.com/deepfabric/elasticell/pkg/pb/pdpb"
@@ -63,8 +62,8 @@ type RedisProxy struct {
 	bcs             map[string]*backend // store addr -> netconn
 	routing         *routing            // uuid -> session
 	syncEpoch       uint64
-	reqs            []*queue.Queue
-	retries         *queue.Queue
+	reqs            []*util.Queue
+	retries         *util.Queue
 	pings           chan string
 
 	ctx      context.Context
@@ -96,13 +95,13 @@ func NewRedisProxy(cfg *Cfg) *RedisProxy {
 		cellLeaderAddrs: make(map[uint64]string),
 		bcs:             make(map[string]*backend),
 		stopC:           make(chan struct{}),
-		reqs:            make([]*queue.Queue, cfg.WorkerCount),
-		retries:         &queue.Queue{},
+		reqs:            make([]*util.Queue, cfg.WorkerCount),
+		retries:         &util.Queue{},
 		pings:           make(chan string),
 	}
 
 	for index := 0; index < cfg.WorkerCount; index++ {
-		p.reqs[index] = &queue.Queue{}
+		p.reqs[index] = &util.Queue{}
 	}
 
 	p.init()
@@ -273,18 +272,19 @@ func (p *RedisProxy) addToForward(r *req) {
 
 func (p *RedisProxy) readyToHandleReq(ctx context.Context) {
 	for _, q := range p.reqs {
-		go func(q *queue.Queue) {
+		go func(q *util.Queue) {
 			log.Infof("bootstrap: handle redis command started")
+			items := make([]interface{}, batch, batch)
 
 			for {
-				reqs, err := q.Get(batch)
+				n, err := q.Get(batch, items)
 				if nil != err {
 					log.Infof("stop: handle redis command stopped")
 					return
 				}
 
-				for _, v := range reqs {
-					r := v.(*req)
+				for i := int64(0); i < n; i++ {
+					r := items[i].(*req)
 					p.handleReq(r)
 				}
 			}
@@ -293,16 +293,17 @@ func (p *RedisProxy) readyToHandleReq(ctx context.Context) {
 
 	go func() {
 		log.Infof("bootstrap: handle redis retries command started")
+		items := make([]interface{}, batch, batch)
 
 		for {
-			reqs, err := p.retries.Get(batch)
+			n, err := p.retries.Get(batch, items)
 			if nil != err {
 				log.Infof("stop: handle redis retries command stopped")
 				return
 			}
 
-			for _, v := range reqs {
-				r := v.(*req)
+			for i := int64(0); i < n; i++ {
+				r := items[i].(*req)
 				p.handleReq(r)
 			}
 		}

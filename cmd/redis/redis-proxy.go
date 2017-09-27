@@ -15,6 +15,8 @@ package main
 
 import (
 	"flag"
+	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"os/signal"
 	"syscall"
@@ -27,6 +29,13 @@ func main() {
 	flag.Parse()
 
 	log.InitLog()
+
+	log.Infof("bootstrap: start pprof at: %s", ":9998")
+	go func() {
+		log.Fatalf("bootstrap: start pprof failed, errors:\n%+v",
+			http.ListenAndServe(":9998", nil))
+	}()
+
 	cfg := proxy.GetCfg()
 
 	p := proxy.NewRedisProxy(cfg)

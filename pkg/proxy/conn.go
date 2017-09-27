@@ -4,9 +4,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Workiva/go-datastructures/queue"
 	"github.com/deepfabric/elasticell/pkg/log"
 	"github.com/deepfabric/elasticell/pkg/pb/raftcmdpb"
+	"github.com/deepfabric/elasticell/pkg/util"
 	"github.com/fagongzi/goetty"
 	"github.com/pkg/errors"
 )
@@ -22,7 +22,7 @@ type backend struct {
 	p    *RedisProxy
 	addr string
 	conn goetty.IOSession
-	reqs *queue.Queue
+	reqs *util.Queue
 }
 
 func newBackend(p *RedisProxy, addr string, conn goetty.IOSession) *backend {
@@ -30,7 +30,7 @@ func newBackend(p *RedisProxy, addr string, conn goetty.IOSession) *backend {
 		p:    p,
 		addr: addr,
 		conn: conn,
-		reqs: &queue.Queue{},
+		reqs: &util.Queue{},
 	}
 }
 
@@ -46,7 +46,7 @@ func (bc *backend) connect() (bool, error) {
 	bc.Lock()
 	yes, err := bc.conn.Connect()
 	if yes {
-		bc.reqs = &queue.Queue{}
+		bc.reqs = &util.Queue{}
 	}
 	bc.Unlock()
 
@@ -106,8 +106,10 @@ func (bc *backend) readLoop() {
 }
 
 func (bc *backend) writeLoop() {
+	items := make([]interface{}, batch, batch)
+
 	for {
-		vs, err := bc.reqs.Get(batch)
+		n, err := bc.reqs.Get(batch, items)
 		if err != nil {
 			log.Errorf("backend-[%s]: exit write loop",
 				bc.addr)
@@ -115,8 +117,8 @@ func (bc *backend) writeLoop() {
 		}
 
 		out := bc.conn.OutBuf()
-		for _, v := range vs {
-			r := v.(*req)
+		for i := int64(0); i < n; i++ {
+			r := items[i].(*req)
 			writeRaftRequest(r.raftReq, out)
 			if log.DebugEnabled() && len(r.raftReq.UUID) > 0 {
 				log.Debugf("backend-[%s]: write req epoch=<%d> uuid=<%v>",
@@ -127,8 +129,8 @@ func (bc *backend) writeLoop() {
 		}
 		err = bc.conn.WriteOutBuf()
 		if err != nil {
-			for _, v := range vs {
-				r := v.(*req)
+			for i := int64(0); i < n; i++ {
+				r := items[i].(*req)
 				r.errorDone(err)
 			}
 		}

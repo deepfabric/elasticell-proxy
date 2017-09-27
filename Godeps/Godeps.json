@@ -11,11 +11,6 @@
 			"Rev": "9f32b5905fd6ce7384093f9d048437e79f7b4d85"
 		},
 		{
-			"ImportPath": "github.com/Workiva/go-datastructures/queue",
-			"Comment": "v1.0.34",
-			"Rev": "ceededf711cf8d8a61cac7003a0f947546da4763"
-		},
-		{
 			"ImportPath": "github.com/beorn7/perks/quantile",
 			"Rev": "4c0e84591b9aa9e6dcfdf3e020114cd81f89d5f9"
 		},
@@ -71,14 +66,6 @@
 			"ImportPath": "github.com/deepfabric/etcd/raft/raftpb",
 			"Comment": "v3.2.0-rc.1-285-g36c655f",
 			"Rev": "36c655f29b9fef15c4094093c7407967c5c5bb96"
-		},
-		{
-			"ImportPath": "github.com/fagongzi/goetty",
-			"Rev": "602f15cc4dffb29af69e75cacab9eb0ce86570e6"
-		},
-		{
-			"ImportPath": "github.com/fagongzi/goetty/protocol/redis",
-			"Rev": "602f15cc4dffb29af69e75cacab9eb0ce86570e6"
 		},
 		{
 			"ImportPath": "github.com/go-ole/go-ole",

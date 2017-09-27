@@ -3,7 +3,6 @@ package proxy
 import (
 	"sync"
 
-	"github.com/Workiva/go-datastructures/queue"
 	"github.com/deepfabric/elasticell/pkg/log"
 	"github.com/deepfabric/elasticell/pkg/pb/raftcmdpb"
 	credis "github.com/deepfabric/elasticell/pkg/redis"
@@ -16,14 +15,14 @@ type redisSession struct {
 	sync.RWMutex
 
 	session goetty.IOSession
-	resps   *queue.Queue
+	resps   *util.Queue
 	addr    string
 }
 
 func newSession(session goetty.IOSession) *redisSession {
 	return &redisSession{
 		session: session,
-		resps:   &queue.Queue{},
+		resps:   &util.Queue{},
 		addr:    session.RemoteAddr(),
 	}
 }
@@ -46,17 +45,19 @@ func (rs *redisSession) errorResp(err error) {
 }
 
 func (rs *redisSession) writeLoop() {
+	items := make([]interface{}, batch, batch)
+
 	for {
 		rs.RLock()
-		resps, err := rs.resps.Get(batch)
+		n, err := rs.resps.Get(batch, items)
 		if nil != err {
 			rs.RUnlock()
 			return
 		}
 
 		buf := rs.session.OutBuf()
-		for _, resp := range resps {
-			rs.doResp(resp.(*raftcmdpb.Response), buf)
+		for i := int64(0); i < n; i++ {
+			rs.doResp(items[i].(*raftcmdpb.Response), buf)
 		}
 		rs.session.WriteOutBuf()
 		rs.RUnlock()
