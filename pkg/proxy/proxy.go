@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"encoding/json"
 	"fmt"
 	"hash/crc32"
 	"io"
@@ -13,6 +14,7 @@ import (
 	"github.com/deepfabric/elasticell/pkg/pb/pdpb"
 	"github.com/deepfabric/elasticell/pkg/pb/raftcmdpb"
 	"github.com/deepfabric/elasticell/pkg/pd"
+	"github.com/deepfabric/elasticell/pkg/pdapi"
 	"github.com/deepfabric/elasticell/pkg/util"
 	"github.com/deepfabric/elasticell/pkg/util/uuid"
 	"github.com/fagongzi/goetty"
@@ -57,6 +59,7 @@ type RedisProxy struct {
 	svr             *goetty.Server
 	pdClient        *pd.Client
 	supportCmds     map[string]struct{}
+	keyConvertFun   func([]byte, func([]byte) metapb.Cell) metapb.Cell
 	ranges          *util.CellTree
 	cellLeaderAddrs map[uint64]string   // cellid -> leader peer store addr
 	bcs             map[string]*backend // store addr -> netconn
@@ -147,13 +150,34 @@ func (p *RedisProxy) doStop() {
 }
 
 func (p *RedisProxy) init() {
+	rsp, err := p.pdClient.GetInitParams(context.TODO(), new(pdpb.GetInitParamsReq))
+	if err != nil {
+		log.Fatalf("bootstrap: create pd client failed, errors:\n%+v", err)
+	}
+
+	params := &pdapi.InitParams{
+		InitCellCount: 1,
+	}
+
+	if len(rsp.Params) > 0 {
+		err = json.Unmarshal(rsp.Params, params)
+		if err != nil {
+			log.Fatalf("bootstrap: create pd client failed, errors:\n%+v", err)
+		}
+	}
+
+	if params.InitCellCount > 1 {
+		p.keyConvertFun = util.Uint64Convert
+	} else {
+		p.keyConvertFun = util.NoConvert
+	}
+
 	p.ctx, p.cancel = context.WithCancel(context.TODO())
 	for _, cmd := range p.cfg.SupportCMDs {
 		p.supportCmds[cmd] = struct{}{}
 	}
 
 	p.refreshRanges(true)
-
 }
 
 func (p *RedisProxy) getSyncEpoch() uint64 {
@@ -419,9 +443,13 @@ func (p *RedisProxy) onResp(rsp *raftcmdpb.Response) {
 	}
 }
 
+func (p *RedisProxy) search(value []byte) metapb.Cell {
+	return p.ranges.Search(value)
+}
+
 func (p *RedisProxy) getLeaderStoreAddr(key []byte) (string, uint64) {
 	p.RLock()
-	cell := p.ranges.Search(key)
+	cell := p.keyConvertFun(key, p.search)
 	addr := p.cellLeaderAddrs[cell.ID]
 	p.RUnlock()
 

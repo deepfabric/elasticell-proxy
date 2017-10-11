@@ -1,6 +1,6 @@
 {
 	"ImportPath": "github.com/deepfabric/elasticell-proxy",
-	"GoVersion": "go1.8",
+	"GoVersion": "go1.9",
 	"GodepVersion": "v79",
 	"Packages": [
 		"./..."
@@ -16,56 +16,60 @@
 		},
 		{
 			"ImportPath": "github.com/deepfabric/elasticell/pkg/log",
-			"Rev": "ba9c43ea6c48b4842c358dbdb11cebe0ae0002d4"
+			"Rev": "c1ed5d36a37a3e5dd8c79951a622395dc3b03dfd"
 		},
 		{
 			"ImportPath": "github.com/deepfabric/elasticell/pkg/pb",
-			"Rev": "ba9c43ea6c48b4842c358dbdb11cebe0ae0002d4"
+			"Rev": "c1ed5d36a37a3e5dd8c79951a622395dc3b03dfd"
 		},
 		{
 			"ImportPath": "github.com/deepfabric/elasticell/pkg/pb/errorpb",
-			"Rev": "ba9c43ea6c48b4842c358dbdb11cebe0ae0002d4"
+			"Rev": "c1ed5d36a37a3e5dd8c79951a622395dc3b03dfd"
 		},
 		{
 			"ImportPath": "github.com/deepfabric/elasticell/pkg/pb/metapb",
-			"Rev": "ba9c43ea6c48b4842c358dbdb11cebe0ae0002d4"
+			"Rev": "c1ed5d36a37a3e5dd8c79951a622395dc3b03dfd"
 		},
 		{
 			"ImportPath": "github.com/deepfabric/elasticell/pkg/pb/mraft",
-			"Rev": "ba9c43ea6c48b4842c358dbdb11cebe0ae0002d4"
+			"Rev": "c1ed5d36a37a3e5dd8c79951a622395dc3b03dfd"
 		},
 		{
 			"ImportPath": "github.com/deepfabric/elasticell/pkg/pb/pdpb",
-			"Rev": "ba9c43ea6c48b4842c358dbdb11cebe0ae0002d4"
+			"Rev": "c1ed5d36a37a3e5dd8c79951a622395dc3b03dfd"
 		},
 		{
 			"ImportPath": "github.com/deepfabric/elasticell/pkg/pb/raftcmdpb",
-			"Rev": "ba9c43ea6c48b4842c358dbdb11cebe0ae0002d4"
+			"Rev": "c1ed5d36a37a3e5dd8c79951a622395dc3b03dfd"
 		},
 		{
 			"ImportPath": "github.com/deepfabric/elasticell/pkg/pd",
-			"Rev": "ba9c43ea6c48b4842c358dbdb11cebe0ae0002d4"
+			"Rev": "c1ed5d36a37a3e5dd8c79951a622395dc3b03dfd"
+		},
+		{
+			"ImportPath": "github.com/deepfabric/elasticell/pkg/pdapi",
+			"Rev": "c1ed5d36a37a3e5dd8c79951a622395dc3b03dfd"
 		},
 		{
 			"ImportPath": "github.com/deepfabric/elasticell/pkg/pool",
-			"Rev": "ba9c43ea6c48b4842c358dbdb11cebe0ae0002d4"
+			"Rev": "c1ed5d36a37a3e5dd8c79951a622395dc3b03dfd"
 		},
 		{
 			"ImportPath": "github.com/deepfabric/elasticell/pkg/redis",
-			"Rev": "ba9c43ea6c48b4842c358dbdb11cebe0ae0002d4"
+			"Rev": "c1ed5d36a37a3e5dd8c79951a622395dc3b03dfd"
 		},
 		{
 			"ImportPath": "github.com/deepfabric/elasticell/pkg/util",
-			"Rev": "ba9c43ea6c48b4842c358dbdb11cebe0ae0002d4"
+			"Rev": "c1ed5d36a37a3e5dd8c79951a622395dc3b03dfd"
 		},
 		{
 			"ImportPath": "github.com/deepfabric/elasticell/pkg/util/uuid",
-			"Rev": "ba9c43ea6c48b4842c358dbdb11cebe0ae0002d4"
+			"Rev": "c1ed5d36a37a3e5dd8c79951a622395dc3b03dfd"
 		},
 		{
 			"ImportPath": "github.com/deepfabric/etcd/raft/raftpb",
-			"Comment": "v3.2.0-rc.1-285-g36c655f",
-			"Rev": "36c655f29b9fef15c4094093c7407967c5c5bb96"
+			"Comment": "v3.1.9-2-gf8c66a5",
+			"Rev": "f8c66a5abeb737f1aeeafe0fbe2aa16e9813b0dd"
 		},
 		{
 			"ImportPath": "github.com/go-ole/go-ole",
@@ -84,6 +88,11 @@
 		{
 			"ImportPath": "github.com/google/btree",
 			"Rev": "316fb6d3f031ae8f4d457c6c5186b9e3ded70435"
+		},
+		{
+			"ImportPath": "github.com/gorilla/mux",
+			"Comment": "v1.4.0",
+			"Rev": "bcd8bc72b08df0f70df986b97f95590779502d31"
 		},
 		{
 			"ImportPath": "github.com/matttproud/golang_protobuf_extensions/pbutil",
@@ -139,6 +148,15 @@
 			"ImportPath": "github.com/shirou/gopsutil/internal/common",
 			"Comment": "v2.17.02-24-g423a8ff",
 			"Rev": "423a8ff2a6da39265b3d05d36ca7e3f18fc8d733"
+		},
+		{
+			"ImportPath": "github.com/unrolled/render",
+			"Rev": "a0ec58421ddf111bd7efd3b7087399ca7d5da2f1"
+		},
+		{
+			"ImportPath": "github.com/urfave/negroni",
+			"Comment": "v0.2.0",
+			"Rev": "fde5e16d32adc7ad637e9cd9ad21d4ebc6192535"
 		},
 		{
 			"ImportPath": "golang.org/x/net/context",
