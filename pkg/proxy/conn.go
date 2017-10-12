@@ -55,14 +55,14 @@ func (bc *backend) connect() (bool, error) {
 
 func (bc *backend) close() {
 	bc.Lock()
-	if bc.conn != nil {
-		bc.conn.Close()
-	}
-
 	reqs := bc.reqs.Dispose()
 	for _, v := range reqs {
 		r := v.(*req)
 		r.errorDone(errConnect)
+	}
+
+	if bc.conn != nil {
+		bc.conn.Close()
 	}
 	bc.Unlock()
 }
