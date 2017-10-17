@@ -18,7 +18,7 @@ type Cfg struct {
 	PDAddrs       []string `json:"pdAddrs"`
 	MaxRetries    int      `json:"maxRetries"`
 	RetryDuration int64    `json:"retryDuration"`
-	WorkerCount   int      `json:"workerCount"`
+	WorkerCount   uint64   `json:"workerCount"`
 	SupportCMDs   []string `json:"supportCMDs"`
 }
 
