@@ -1,10 +1,10 @@
-// +build !darwin,!linux,!freebsd,!openbsd,!windows,!solaris
+// +build !darwin,!linux,!freebsd,!openbsd,!windows
 
 package disk
 
 import "github.com/shirou/gopsutil/internal/common"
 
-func IOCounters(names ...string) (map[string]IOCountersStat, error) {
+func IOCounters() (map[string]IOCountersStat, error) {
 	return nil, common.ErrNotImplementedError
 }
 

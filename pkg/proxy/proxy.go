@@ -3,6 +3,7 @@ package proxy
 import (
 	"encoding/json"
 	"fmt"
+	"hash/crc32"
 	"io"
 	"sync"
 	"sync/atomic"
@@ -60,7 +61,6 @@ type RedisProxy struct {
 	supportCmds     map[string]struct{}
 	keyConvertFun   func([]byte, func([]byte) metapb.Cell) metapb.Cell
 	ranges          *util.CellTree
-	stores          map[uint64]*metapb.Store
 	cellLeaderAddrs map[uint64]string   // cellid -> leader peer store addr
 	bcs             map[string]*backend // store addr -> netconn
 	routing         *routing            // uuid -> session
@@ -95,7 +95,6 @@ func NewRedisProxy(cfg *Cfg) *RedisProxy {
 		supportCmds:     make(map[string]struct{}),
 		routing:         newRouting(),
 		ranges:          util.NewCellTree(),
-		stores:          make(map[uint64]*metapb.Store),
 		cellLeaderAddrs: make(map[uint64]string),
 		bcs:             make(map[string]*backend),
 		stopC:           make(chan struct{}),
@@ -104,7 +103,7 @@ func NewRedisProxy(cfg *Cfg) *RedisProxy {
 		pings:           make(chan string),
 	}
 
-	for index := uint64(0); index < cfg.WorkerCount; index++ {
+	for index := 0; index < cfg.WorkerCount; index++ {
 		p.reqs[index] = &util.Queue{}
 	}
 
@@ -185,40 +184,14 @@ func (p *RedisProxy) getSyncEpoch() uint64 {
 	return atomic.LoadUint64(&p.syncEpoch)
 }
 
-func (p *RedisProxy) refreshLeader(cellID, leaderStoreID uint64) {
-	// maybe the leader election is not complete
-	if leaderStoreID == 0 {
-		return
-	}
-
-	p.Lock()
-	store := p.stores[leaderStoreID]
-	if nil == store {
-		rsp, err := p.pdClient.GetStore(context.TODO(), &pdpb.GetStoreReq{
-			StoreID: leaderStoreID,
-		})
-
-		if err != nil {
-			log.Fatalf("bootstrap: get store<%d> from pd failed, errors:\n%+v",
-				leaderStoreID,
-				err)
-		}
-
-		store = &rsp.Store
-		p.stores[leaderStoreID] = store
-	}
-
-	p.cellLeaderAddrs[cellID] = store.ClientAddress
-	p.syncEpoch++
-	p.Unlock()
-}
-
 func (p *RedisProxy) refreshRanges(immediate bool) {
 	old := p.getSyncEpoch()
 	log.Infof("pd-sync: try to sync, epoch=<%d>", old)
 
+	p.Lock()
 	if old < p.syncEpoch {
 		log.Infof("pd-sync: already sync, skip, old=<%d> new=<%d>", old, p.syncEpoch)
+		p.Unlock()
 		return
 	}
 
@@ -226,7 +199,6 @@ func (p *RedisProxy) refreshRanges(immediate bool) {
 		time.Sleep(time.Duration(p.cfg.RetryDuration) * time.Millisecond)
 	}
 
-	p.Lock()
 	rsp, err := p.pdClient.GetLastRanges(context.TODO(), &pdpb.GetLastRangesReq{})
 	if err != nil {
 		log.Fatalf("bootstrap: get cell ranges from pd failed, errors:\n%+v", err)
@@ -236,7 +208,6 @@ func (p *RedisProxy) refreshRanges(immediate bool) {
 	for _, r := range rsp.Ranges {
 		p.ranges.Update(r.Cell)
 		p.cellLeaderAddrs[r.Cell.ID] = r.LeaderStore.ClientAddress
-		p.stores[r.LeaderStore.ID] = &r.LeaderStore
 	}
 	p.syncEpoch++
 
@@ -245,8 +216,9 @@ func (p *RedisProxy) refreshRanges(immediate bool) {
 }
 
 func (p *RedisProxy) clean() {
-	p.stores = make(map[uint64]*metapb.Store)
-	p.cellLeaderAddrs = make(map[uint64]string)
+	for id := range p.cellLeaderAddrs {
+		delete(p.cellLeaderAddrs, id)
+	}
 	p.ranges = util.NewCellTree()
 }
 
@@ -298,11 +270,7 @@ func (p *RedisProxy) addToPing(target string) {
 	p.pings <- target
 }
 
-func (p *RedisProxy) retry(r *req, rsp *raftcmdpb.Response) {
-	if nil != rsp && rsp.Error.NotLeader != nil {
-		p.refreshLeader(rsp.Error.NotLeader.CellID, rsp.Error.NotLeader.Leader.StoreID)
-	}
-
+func (p *RedisProxy) retry(r *req) {
 	r.retries++
 	p.retries.Put(r)
 }
@@ -321,8 +289,8 @@ func (p *RedisProxy) addToForward(r *req) {
 		return
 	}
 
-	c := p.ranges.Search(r.raftReq.Cmd[1])
-	index := (p.cfg.WorkerCount - 1) & c.ID
+	key := int(crc32.ChecksumIEEE(r.raftReq.Cmd[1]))
+	index := (p.cfg.WorkerCount - 1) & key
 	p.reqs[index].Put(r)
 }
 
@@ -419,10 +387,10 @@ func (p *RedisProxy) handleReq(r *req) {
 	}
 
 	if target == "" {
-		log.Debugf("req: leader not found for key, uuid=<%+v> key=<%v>",
+		log.Errorf("req: leader not found for key, uuid=<%+v> key=<%v>",
 			r.raftReq.UUID,
 			r.raftReq.Cmd[1])
-		p.retry(r, nil)
+		p.retry(r)
 		return
 	}
 
@@ -431,7 +399,7 @@ func (p *RedisProxy) handleReq(r *req) {
 		log.Errorf("req: forward failed, uuid=<%+v> error=<%s>",
 			r.raftReq.UUID,
 			err)
-		p.retry(r, nil)
+		p.retry(r)
 		return
 	}
 }
@@ -464,7 +432,7 @@ func (p *RedisProxy) onResp(rsp *raftcmdpb.Response) {
 	r := p.routing.delete(rsp.UUID)
 	if r != nil {
 		if rsp.Type == raftcmdpb.RaftError {
-			p.retry(r, rsp)
+			p.retry(r)
 			return
 		}
 
