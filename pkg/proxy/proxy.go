@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"io"
 	"sync"
-	"sync/atomic"
 	"time"
 
+	"github.com/deepfabric/elasticell/pkg/codec"
 	"github.com/deepfabric/elasticell/pkg/log"
 	"github.com/deepfabric/elasticell/pkg/pb/metapb"
 	"github.com/deepfabric/elasticell/pkg/pb/pdpb"
@@ -56,6 +56,10 @@ type RedisProxy struct {
 
 	cfg             *Cfg
 	svr             *goetty.Server
+	notify          *goetty.Server
+	localOffset     uint64
+	serverOffset    uint64
+	inSyncNotify    bool
 	pdClient        *pd.Client
 	supportCmds     map[string]struct{}
 	keyConvertFun   func([]byte, func([]byte) metapb.Cell) metapb.Cell
@@ -83,15 +87,21 @@ func NewRedisProxy(cfg *Cfg) *RedisProxy {
 		log.Fatalf("bootstrap: create pd client failed, errors:\n%+v", err)
 	}
 
-	tcpSvr := goetty.NewServer(cfg.Addr,
+	redisSvr := goetty.NewServer(cfg.Addr,
 		redis.NewRedisDecoder(),
 		goetty.NewEmptyEncoder(),
+		goetty.NewInt64IDGenerator())
+
+	notifySvr := goetty.NewServer(cfg.AddrNotify,
+		&codec.ProxyDecoder{},
+		&codec.ProxyEncoder{},
 		goetty.NewInt64IDGenerator())
 
 	p := &RedisProxy{
 		pdClient:        client,
 		cfg:             cfg,
-		svr:             tcpSvr,
+		svr:             redisSvr,
+		notify:          notifySvr,
 		supportCmds:     make(map[string]struct{}),
 		routing:         newRouting(),
 		ranges:          util.NewCellTree(),
@@ -143,6 +153,7 @@ func (p *RedisProxy) doStop() {
 			log.Infof("stop: store connection closed, addr=<%s>", bc.addr)
 		}
 
+		p.notify.Stop()
 		p.svr.Stop()
 		log.Infof("stop: tcp listen stopped")
 
@@ -151,9 +162,48 @@ func (p *RedisProxy) doStop() {
 }
 
 func (p *RedisProxy) init() {
+	p.ctx, p.cancel = context.WithCancel(context.TODO())
+
+	go p.notify.Start(p.doNotifyConnection)
+
+	_, err := p.pdClient.RegisterWatcher(context.TODO(), &pdpb.RegisterWatcherReq{
+		Addr: p.cfg.AddrNotify,
+	})
+	if err != nil {
+		log.Fatalf("bootstrap: registor watcher failed, errors:\n%+v", err)
+	}
+
+	go func() {
+		ticker := time.NewTicker(time.Second * time.Duration(p.cfg.WatcherHeartbeatSec))
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-p.ctx.Done():
+				log.Infof("stop: watcher heartbeat stopped")
+				return
+			case <-ticker.C:
+				rsp, err := p.pdClient.WatcherHeartbeat(context.TODO(), &pdpb.WatcherHeartbeatReq{
+					Addr:   p.cfg.AddrNotify,
+					Offset: p.getLocalOffset(),
+				})
+				if err != nil {
+					log.Infof("watcher: watcher heartbeat failed: errors:\n%+v",
+						err)
+				}
+
+				// If we are paused from pd, we need refresh all ranges
+				if rsp.Paused {
+					p.resetLocalOffset(0)
+					p.refreshRanges()
+				}
+			}
+		}
+	}()
+
 	rsp, err := p.pdClient.GetInitParams(context.TODO(), new(pdpb.GetInitParamsReq))
 	if err != nil {
-		log.Fatalf("bootstrap: create pd client failed, errors:\n%+v", err)
+		log.Fatalf("bootstrap: get init params failed, errors:\n%+v", err)
 	}
 
 	params := &pdapi.InitParams{
@@ -173,57 +223,40 @@ func (p *RedisProxy) init() {
 		p.keyConvertFun = util.NoConvert
 	}
 
-	p.ctx, p.cancel = context.WithCancel(context.TODO())
 	for _, cmd := range p.cfg.SupportCMDs {
 		p.supportCmds[cmd] = struct{}{}
 	}
 
-	p.refreshRanges(true)
+	p.refreshRanges()
 }
 
 func (p *RedisProxy) getSyncEpoch() uint64 {
-	return atomic.LoadUint64(&p.syncEpoch)
+	p.RLock()
+	v := p.syncEpoch
+	p.RUnlock()
+	return v
 }
 
-func (p *RedisProxy) refreshLeader(cellID, leaderStoreID uint64) {
-	// maybe the leader election is not complete
-	if leaderStoreID == 0 {
-		return
-	}
-
+func (p *RedisProxy) refreshRange(r *pdpb.Range) {
 	p.Lock()
-	store := p.stores[leaderStoreID]
-	if nil == store {
-		rsp, err := p.pdClient.GetStore(context.TODO(), &pdpb.GetStoreReq{
-			StoreID: leaderStoreID,
-		})
-
-		if err != nil {
-			log.Fatalf("bootstrap: get store<%d> from pd failed, errors:\n%+v",
-				leaderStoreID,
-				err)
-		}
-
-		store = &rsp.Store
-		p.stores[leaderStoreID] = store
-	}
-
-	p.cellLeaderAddrs[cellID] = store.ClientAddress
+	p.doRefreshRange(r)
 	p.syncEpoch++
 	p.Unlock()
 }
 
-func (p *RedisProxy) refreshRanges(immediate bool) {
+func (p *RedisProxy) doRefreshRange(r *pdpb.Range) {
+	p.ranges.Update(r.Cell)
+	p.cellLeaderAddrs[r.Cell.ID] = r.LeaderStore.ClientAddress
+	p.stores[r.LeaderStore.ID] = &r.LeaderStore
+}
+
+func (p *RedisProxy) refreshRanges() {
 	old := p.getSyncEpoch()
 	log.Infof("pd-sync: try to sync, epoch=<%d>", old)
 
 	if old < p.syncEpoch {
 		log.Infof("pd-sync: already sync, skip, old=<%d> new=<%d>", old, p.syncEpoch)
 		return
-	}
-
-	if !immediate {
-		time.Sleep(time.Duration(p.cfg.RetryDuration) * time.Millisecond)
 	}
 
 	p.Lock()
@@ -234,9 +267,7 @@ func (p *RedisProxy) refreshRanges(immediate bool) {
 
 	p.clean()
 	for _, r := range rsp.Ranges {
-		p.ranges.Update(r.Cell)
-		p.cellLeaderAddrs[r.Cell.ID] = r.LeaderStore.ClientAddress
-		p.stores[r.LeaderStore.ID] = &r.LeaderStore
+		p.doRefreshRange(r)
 	}
 	p.syncEpoch++
 
@@ -248,6 +279,84 @@ func (p *RedisProxy) clean() {
 	p.stores = make(map[uint64]*metapb.Store)
 	p.cellLeaderAddrs = make(map[uint64]string)
 	p.ranges = util.NewCellTree()
+}
+
+func (p *RedisProxy) resetLocalOffset(offset uint64) {
+	p.Lock()
+	p.localOffset = offset
+	log.Infof("notify: offset reset to: %d", offset)
+	p.Unlock()
+}
+
+func (p *RedisProxy) getLocalOffset() uint64 {
+	p.RLock()
+	v := p.localOffset
+	p.RUnlock()
+
+	return v
+}
+
+func (p *RedisProxy) resetServerOffset(offset uint64) {
+	p.serverOffset = offset
+}
+
+func (p *RedisProxy) doSync(addr string, conn goetty.IOSession) error {
+	if !p.inSyncNotify {
+		err := conn.Write(&pdpb.WatcherNotifySync{
+			Offset: p.getLocalOffset(),
+		})
+		if err != nil {
+			return err
+		}
+		p.inSyncNotify = true
+	}
+
+	return nil
+}
+
+func (p *RedisProxy) doNotifyConnection(conn goetty.IOSession) error {
+	addr := conn.RemoteAddr()
+	p.resetLocalOffset(0)
+
+	for {
+		msg, err := conn.Read()
+		if err != nil {
+			log.Errorf("notify-[%s]: read notify failed, errors\n %+v",
+				addr,
+				err)
+			p.refreshRanges()
+			return err
+		}
+		if nt, ok := msg.(*pdpb.WatcherNotify); ok {
+			if nt.Offset == 0 || nt.Offset > p.getLocalOffset() {
+				p.resetServerOffset(nt.Offset)
+				err := p.doSync(addr, conn)
+				if err != nil {
+					log.Errorf("notify-[%s]: sync notify failed, errors\n %+v",
+						addr,
+						err)
+					return err
+				}
+			}
+		} else if rsp, ok := msg.(*pdpb.WatcherNotifyRsp); ok {
+			p.inSyncNotify = false
+
+			for _, r := range rsp.Ranges {
+				p.refreshRange(r)
+			}
+			p.resetLocalOffset(rsp.Offset)
+
+			if p.getLocalOffset() < p.serverOffset {
+				err := p.doSync(addr, conn)
+				if err != nil {
+					log.Errorf("notify-[%s]: sync notify failed, errors\n %+v",
+						addr,
+						err)
+					return err
+				}
+			}
+		}
+	}
 }
 
 func (p *RedisProxy) doConnection(session goetty.IOSession) error {
@@ -298,11 +407,7 @@ func (p *RedisProxy) addToPing(target string) {
 	p.pings <- target
 }
 
-func (p *RedisProxy) retry(r *req, rsp *raftcmdpb.Response) {
-	if nil != rsp && rsp.Error.NotLeader != nil {
-		p.refreshLeader(rsp.Error.NotLeader.CellID, rsp.Error.NotLeader.Leader.StoreID)
-	}
-
+func (p *RedisProxy) retry(r *req) {
 	r.retries++
 	p.retries.Put(r)
 }
@@ -358,9 +463,19 @@ func (p *RedisProxy) readyToHandleReq(ctx context.Context) {
 				return
 			}
 
+			failed := 0
 			for i := int64(0); i < n; i++ {
 				r := items[i].(*req)
-				p.handleReq(r)
+				if r.raftReq.Epoch < p.getSyncEpoch() {
+					p.addToForward(r)
+				} else {
+					p.retries.Put(r)
+					failed++
+				}
+			}
+
+			if failed > 0 {
+				time.Sleep(time.Millisecond * 10)
 			}
 		}
 	}()
@@ -386,18 +501,22 @@ func (p *RedisProxy) readyToHandleReq(ctx context.Context) {
 }
 
 func (p *RedisProxy) handleReq(r *req) {
-	if r.retries >= p.cfg.MaxRetries {
-		err := fmt.Errorf("retry %d times failed", r.retries)
-		log.Errorf("redis-[%s]: handle error: uuid=<%+v>, error=<%s>",
-			r.rs.addr,
-			r.raftReq.UUID,
-			err)
-		p.routing.delete(r.raftReq.UUID)
-		r.errorDone(err)
-		return
-	} else if r.retries > 0 {
+	// if r.retries >= p.cfg.MaxRetries {
+	// 	err := fmt.Errorf("retry %d times failed", r.retries)
+	// 	log.Errorf("redis-[%s]: handle error: uuid=<%+v>, error=<%s>",
+	// 		r.rs.addr,
+	// 		r.raftReq.UUID,
+	// 		err)
+	// 	p.routing.delete(r.raftReq.UUID)
+	// 	r.errorDone(err)
+	// 	return
+	// } else
+
+	if r.retries > 0 {
+		// If epoch is not stale, wait next
 		if r.raftReq.Epoch >= p.getSyncEpoch() {
-			p.refreshRanges(false)
+			p.retries.Put(r)
+			return
 		}
 	}
 
@@ -422,7 +541,7 @@ func (p *RedisProxy) handleReq(r *req) {
 		log.Debugf("req: leader not found for key, uuid=<%+v> key=<%v>",
 			r.raftReq.UUID,
 			r.raftReq.Cmd[1])
-		p.retry(r, nil)
+		p.retry(r)
 		return
 	}
 
@@ -431,7 +550,7 @@ func (p *RedisProxy) handleReq(r *req) {
 		log.Errorf("req: forward failed, uuid=<%+v> error=<%s>",
 			r.raftReq.UUID,
 			err)
-		p.retry(r, nil)
+		p.retry(r)
 		return
 	}
 }
@@ -464,7 +583,7 @@ func (p *RedisProxy) onResp(rsp *raftcmdpb.Response) {
 	r := p.routing.delete(rsp.UUID)
 	if r != nil {
 		if rsp.Type == raftcmdpb.RaftError {
-			p.retry(r, rsp)
+			p.retry(r)
 			return
 		}
 

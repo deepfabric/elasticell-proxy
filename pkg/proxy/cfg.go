@@ -14,12 +14,14 @@ var (
 
 // Cfg returns cfg for proxy
 type Cfg struct {
-	Addr          string   `json:"addr"`
-	PDAddrs       []string `json:"pdAddrs"`
-	MaxRetries    int      `json:"maxRetries"`
-	RetryDuration int64    `json:"retryDuration"`
-	WorkerCount   uint64   `json:"workerCount"`
-	SupportCMDs   []string `json:"supportCMDs"`
+	Addr                string   `json:"addr"`
+	AddrNotify          string   `json:"addrNotify"`
+	WatcherHeartbeatSec int      `json:"watcherHeartbeatSec"`
+	PDAddrs             []string `json:"pdAddrs"`
+	MaxRetries          int      `json:"maxRetries"`
+	RetryDuration       int64    `json:"retryDuration"`
+	WorkerCount         uint64   `json:"workerCount"`
+	SupportCMDs         []string `json:"supportCMDs"`
 }
 
 // GetCfg get cfg from command

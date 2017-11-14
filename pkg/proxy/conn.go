@@ -4,6 +4,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/deepfabric/elasticell/pkg/codec"
 	"github.com/deepfabric/elasticell/pkg/log"
 	"github.com/deepfabric/elasticell/pkg/pb/raftcmdpb"
 	"github.com/deepfabric/elasticell/pkg/util"
@@ -84,7 +85,7 @@ func (bc *backend) addReq(r *req) error {
 
 func (bc *backend) readLoop() {
 	for {
-		data, err := bc.conn.ReadTimeout(time.Second * 10)
+		data, err := bc.conn.Read()
 		if err != nil {
 			log.Errorf("backend-[%s]: read error: %s",
 				bc.addr,
@@ -119,7 +120,7 @@ func (bc *backend) writeLoop() {
 		out := bc.conn.OutBuf()
 		for i := int64(0); i < n; i++ {
 			r := items[i].(*req)
-			writeRaftRequest(r.raftReq, out)
+			codec.WriteProxyMessage(codec.RedisBegin, r.raftReq, out)
 			if log.DebugEnabled() && len(r.raftReq.UUID) > 0 {
 				log.Debugf("backend-[%s]: write req epoch=<%d> uuid=<%v>",
 					bc.addr,
@@ -167,7 +168,7 @@ func (p *RedisProxy) createConn(addr string) *backend {
 		return bc
 	}
 
-	conn := goetty.NewConnector(p.getConnectionCfg(addr), &redisDecoder{}, &redisEncoder{})
+	conn := goetty.NewConnector(p.getConnectionCfg(addr), &codec.ProxyDecoder{}, &codec.ProxyEncoder{})
 	b := newBackend(p, addr, conn)
 	p.bcs[addr] = b
 	p.Unlock()

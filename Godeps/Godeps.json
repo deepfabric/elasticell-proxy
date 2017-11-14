@@ -15,69 +15,65 @@
 			"Rev": "4c0e84591b9aa9e6dcfdf3e020114cd81f89d5f9"
 		},
 		{
+			"ImportPath": "github.com/deepfabric/elasticell/pkg/codec",
+			"Rev": "aae65f70e6f31f6ef909624d750401d0aa1407a5"
+		},
+		{
 			"ImportPath": "github.com/deepfabric/elasticell/pkg/log",
-			"Rev": "fc80d7b48dd18caaa750c09916a6090fc42781c0"
+			"Rev": "aae65f70e6f31f6ef909624d750401d0aa1407a5"
 		},
 		{
 			"ImportPath": "github.com/deepfabric/elasticell/pkg/pb",
-			"Rev": "fc80d7b48dd18caaa750c09916a6090fc42781c0"
+			"Rev": "aae65f70e6f31f6ef909624d750401d0aa1407a5"
 		},
 		{
 			"ImportPath": "github.com/deepfabric/elasticell/pkg/pb/errorpb",
-			"Rev": "fc80d7b48dd18caaa750c09916a6090fc42781c0"
+			"Rev": "aae65f70e6f31f6ef909624d750401d0aa1407a5"
 		},
 		{
 			"ImportPath": "github.com/deepfabric/elasticell/pkg/pb/metapb",
-			"Rev": "fc80d7b48dd18caaa750c09916a6090fc42781c0"
+			"Rev": "aae65f70e6f31f6ef909624d750401d0aa1407a5"
 		},
 		{
 			"ImportPath": "github.com/deepfabric/elasticell/pkg/pb/mraft",
-			"Rev": "fc80d7b48dd18caaa750c09916a6090fc42781c0"
+			"Rev": "aae65f70e6f31f6ef909624d750401d0aa1407a5"
 		},
 		{
 			"ImportPath": "github.com/deepfabric/elasticell/pkg/pb/pdpb",
-			"Rev": "fc80d7b48dd18caaa750c09916a6090fc42781c0"
+			"Rev": "aae65f70e6f31f6ef909624d750401d0aa1407a5"
 		},
 		{
 			"ImportPath": "github.com/deepfabric/elasticell/pkg/pb/raftcmdpb",
-			"Rev": "fc80d7b48dd18caaa750c09916a6090fc42781c0"
+			"Rev": "aae65f70e6f31f6ef909624d750401d0aa1407a5"
 		},
 		{
 			"ImportPath": "github.com/deepfabric/elasticell/pkg/pd",
-			"Rev": "fc80d7b48dd18caaa750c09916a6090fc42781c0"
+			"Rev": "aae65f70e6f31f6ef909624d750401d0aa1407a5"
 		},
 		{
 			"ImportPath": "github.com/deepfabric/elasticell/pkg/pdapi",
-			"Rev": "fc80d7b48dd18caaa750c09916a6090fc42781c0"
+			"Rev": "aae65f70e6f31f6ef909624d750401d0aa1407a5"
 		},
 		{
 			"ImportPath": "github.com/deepfabric/elasticell/pkg/pool",
-			"Rev": "fc80d7b48dd18caaa750c09916a6090fc42781c0"
+			"Rev": "aae65f70e6f31f6ef909624d750401d0aa1407a5"
 		},
 		{
 			"ImportPath": "github.com/deepfabric/elasticell/pkg/redis",
-			"Rev": "fc80d7b48dd18caaa750c09916a6090fc42781c0"
+			"Rev": "aae65f70e6f31f6ef909624d750401d0aa1407a5"
 		},
 		{
 			"ImportPath": "github.com/deepfabric/elasticell/pkg/util",
-			"Rev": "fc80d7b48dd18caaa750c09916a6090fc42781c0"
+			"Rev": "aae65f70e6f31f6ef909624d750401d0aa1407a5"
 		},
 		{
 			"ImportPath": "github.com/deepfabric/elasticell/pkg/util/uuid",
-			"Rev": "fc80d7b48dd18caaa750c09916a6090fc42781c0"
+			"Rev": "aae65f70e6f31f6ef909624d750401d0aa1407a5"
 		},
 		{
 			"ImportPath": "github.com/deepfabric/etcd/raft/raftpb",
-			"Comment": "v3.1.9-2-gf8c66a5",
-			"Rev": "f8c66a5abeb737f1aeeafe0fbe2aa16e9813b0dd"
-		},
-		{
-			"ImportPath": "github.com/fagongzi/goetty",
-			"Rev": "72afe1c0061766857f4f212f23324713fb2d77fc"
-		},
-		{
-			"ImportPath": "github.com/fagongzi/goetty/protocol/redis",
-			"Rev": "72afe1c0061766857f4f212f23324713fb2d77fc"
+			"Comment": "v3.2.0-rc.1-285-g36c655f",
+			"Rev": "36c655f29b9fef15c4094093c7407967c5c5bb96"
 		},
 		{
 			"ImportPath": "github.com/go-ole/go-ole",
