@@ -158,22 +158,17 @@ func (s *clientIOSession) OutBuf() *ByteBuf {
 
 // WriteOutBuf writes bytes that in the internal bytebuf
 func (s *clientIOSession) WriteOutBuf() error {
+	n, err := s.conn.Write(s.out.buf[s.out.readerIndex:s.out.writerIndex])
 	s.batchCount = 0
-	buf := s.out
-	written := 0
-	all := buf.Readable()
-	for {
-		if written == all {
-			break
-		}
 
-		n, err := s.conn.Write(buf.buf[buf.readerIndex+written : buf.writerIndex])
-		if err != nil {
-			s.out.Clear()
-			return err
-		}
+	if err != nil {
+		s.out.Clear()
+		return err
+	}
 
-		written += n
+	if n != s.out.Readable() {
+		s.out.Clear()
+		return ErrWrite
 	}
 
 	s.out.Clear()

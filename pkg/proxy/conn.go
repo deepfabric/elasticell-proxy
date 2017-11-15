@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"sort"
 	"sync"
 	"time"
 
@@ -171,6 +172,13 @@ func (p *RedisProxy) createConn(addr string) *backend {
 	conn := goetty.NewConnector(p.getConnectionCfg(addr), &codec.ProxyDecoder{}, &codec.ProxyEncoder{})
 	b := newBackend(p, addr, conn)
 	p.bcs[addr] = b
+
+	// update p.bcAddrs
+	p.bcAddrs = make([]string, 0)
+	for addr := range p.bcs {
+		p.bcAddrs = append(p.bcAddrs, addr)
+	}
+	sort.Strings(p.bcAddrs)
 	p.Unlock()
 	return b
 }

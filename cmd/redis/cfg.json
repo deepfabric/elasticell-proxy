@@ -11,6 +11,7 @@
     "retryDuration": 2000,
     "workerCount": 64,
     "supportCMDs": [
+        "query",
         "ping",
         "set",
         "get",
