@@ -14,10 +14,10 @@
   revision = "4c0e84591b9aa9e6dcfdf3e020114cd81f89d5f9"
 
 [[projects]]
-  branch = "index"
+  branch = "master"
   name = "github.com/deepfabric/elasticell"
   packages = ["pkg/codec","pkg/log","pkg/pb","pkg/pb/errorpb","pkg/pb/metapb","pkg/pb/mraft","pkg/pb/pdpb","pkg/pb/querypb","pkg/pb/raftcmdpb","pkg/pd","pkg/pdapi","pkg/pool","pkg/redis","pkg/util","pkg/util/uuid"]
-  revision = "c6a212c391f6253792a57e6ae461bff2da1c814c"
+  revision = "b8a0d14f4e152409ae0e4aa84c3efea6394494f5"
 
 [[projects]]
   name = "github.com/deepfabric/etcd"
@@ -29,7 +29,7 @@
   branch = "master"
   name = "github.com/fagongzi/goetty"
   packages = [".","protocol/redis"]
-  revision = "72afe1c0061766857f4f212f23324713fb2d77fc"
+  revision = "db900362fdd71a1f03fc846afe847ec1b47e8730"
 
 [[projects]]
   name = "github.com/go-ole/go-ole"
@@ -154,6 +154,6 @@
 [solve-meta]
   analyzer-name = "dep"
   analyzer-version = 1
-  inputs-digest = "adf048299620f6f4da979e2e477ebbda24b365ccfd319047c7a217272d480cf1"
+  inputs-digest = "ed5486ebf197b8c8774e168590fa6b877318167a910b4216398db24962f32dc6"
   solver-name = "gps-cdcl"
   solver-version = 1

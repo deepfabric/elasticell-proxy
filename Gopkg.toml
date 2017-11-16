@@ -27,7 +27,7 @@
 
 [[constraint]]
   name = "github.com/deepfabric/elasticell"
-  branch = "index"
+  branch = "master"
 
 [[constraint]]
   name = "github.com/fagongzi/goetty"

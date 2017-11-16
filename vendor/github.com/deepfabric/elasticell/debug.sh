@@ -151,11 +151,11 @@ do_clear () {
 }
 
 do_build () {
-    mkdir -p $CFG_DIR $LOG_DIR
-    cp $ELASTICELL_SRC_DIR/quickstart-cfgs/* $CFG_DIR
-    cd $ELASTICELL_SRC_DIR/pkg/pb
-    echo "compiling *.pb......" && bash gen.sh > /dev/null
-    cd $ELASTICELL_SRC_DIR
+    mkdir -p $CFG_DIR $LOG_DIR &&
+    cp $ELASTICELL_SRC_DIR/quickstart-cfgs/* $CFG_DIR &&
+    cd $ELASTICELL_SRC_DIR/pkg/pb &&
+    echo "compiling *.pb......" && bash gen.sh > /dev/null &&
+    cd $ELASTICELL_SRC_DIR &&
     echo "building pd......" && go build -gcflags "-N -l"  -o $ELASTICELL_DIR/pd github.com/deepfabric/elasticell/cmd/pd &&
     echo "building cell......" && go build -gcflags "-N -l" -o $ELASTICELL_DIR/cell github.com/deepfabric/elasticell/cmd/cell &&
     echo "building redis-proxy......" && go build -gcflags "-N -l" -o $ELASTICELL_DIR/redis-proxy github.com/deepfabric/elasticell-proxy/cmd/redis &&
