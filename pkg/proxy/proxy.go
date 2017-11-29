@@ -156,7 +156,7 @@ func (p *RedisProxy) doStop() {
 
 		log.Infof("stop: start to stop redis proxy")
 		for _, bc := range p.bcs {
-			bc.close()
+			bc.close(true)
 			log.Infof("stop: store connection closed, addr=<%s>", bc.addr)
 		}
 
@@ -197,10 +197,8 @@ func (p *RedisProxy) init() {
 				if err != nil {
 					log.Infof("watcher: watcher heartbeat failed: errors:\n%+v",
 						err)
-				}
-
-				// If we are paused from pd, we need refresh all ranges
-				if rsp.Paused {
+				} else if rsp.Paused {
+					// If we are paused from pd, we need refresh all ranges
 					p.resetLocalOffset(0)
 					p.refreshRanges()
 				}
@@ -378,6 +376,7 @@ func (p *RedisProxy) doNotifyConnection(conn goetty.IOSession) error {
 			for _, r := range rsp.Ranges {
 				p.refreshRange(r)
 			}
+
 			p.resetLocalOffset(rsp.Offset)
 
 			if p.getLocalOffset() < p.serverOffset {
@@ -535,17 +534,6 @@ func (p *RedisProxy) readyToHandleReq(ctx context.Context) {
 }
 
 func (p *RedisProxy) handleReq(r *req) {
-	// if r.retries >= p.cfg.MaxRetries {
-	// 	err := fmt.Errorf("retry %d times failed", r.retries)
-	// 	log.Errorf("redis-[%s]: handle error: uuid=<%+v>, error=<%s>",
-	// 		r.rs.addr,
-	// 		r.raftReq.UUID,
-	// 		err)
-	// 	p.routing.delete(r.raftReq.UUID)
-	// 	r.errorDone(err)
-	// 	return
-	// } else
-
 	if r.retries > 0 {
 		// If epoch is not stale, wait next
 		if r.raftReq.Epoch >= p.getSyncEpoch() {
@@ -604,15 +592,16 @@ func (p *RedisProxy) forwardTo(addr string, r *req) error {
 		p.routing.put(r.raftReq.UUID, r)
 	}
 
+	if nil != r.raftReq && len(r.raftReq.UUID) > 0 {
+		log.Debugf("req: added to backend queue, uuid=<%+v>", r.raftReq.UUID)
+	}
+
 	err = bc.addReq(r)
 	if err != nil {
 		p.routing.delete(r.raftReq.UUID)
 		return errors.Wrapf(err, "writeTo")
 	}
 
-	if nil != r.raftReq && len(r.raftReq.UUID) > 0 {
-		log.Debugf("req: added to backend queue, uuid=<%+v>", r.raftReq.UUID)
-	}
 	return nil
 }
 

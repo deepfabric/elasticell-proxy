@@ -28,17 +28,20 @@ type backend struct {
 }
 
 func newBackend(p *RedisProxy, addr string, conn goetty.IOSession) *backend {
-	return &backend{
+	bc := &backend{
 		p:    p,
 		addr: addr,
 		conn: conn,
 		reqs: &util.Queue{},
 	}
+
+	bc.writeLoop()
+	return bc
 }
 
 func (bc *backend) isConnected() bool {
 	bc.RLock()
-	v := bc.conn.IsConnected()
+	v := bc.conn != nil && bc.conn.IsConnected()
 	bc.RUnlock()
 
 	return v
@@ -47,20 +50,20 @@ func (bc *backend) isConnected() bool {
 func (bc *backend) connect() (bool, error) {
 	bc.Lock()
 	yes, err := bc.conn.Connect()
-	if yes {
-		bc.reqs = &util.Queue{}
-	}
 	bc.Unlock()
-
+	log.Infof("backend-[%s]: connected", bc.addr)
 	return yes, err
 }
 
-func (bc *backend) close() {
+func (bc *backend) close(exit bool) {
 	bc.Lock()
-	reqs := bc.reqs.Dispose()
-	for _, v := range reqs {
-		r := v.(*req)
-		r.errorDone(errConnect)
+
+	if exit {
+		reqs := bc.reqs.Dispose()
+		for _, v := range reqs {
+			r := v.(*req)
+			r.errorDone(errConnect)
+		}
 	}
 
 	if bc.conn != nil {
@@ -85,58 +88,67 @@ func (bc *backend) addReq(r *req) error {
 }
 
 func (bc *backend) readLoop() {
-	for {
-		data, err := bc.conn.Read()
-		if err != nil {
-			log.Errorf("backend-[%s]: read error: %s",
-				bc.addr,
-				err)
-			bc.close()
-			return
-		}
+	go func() {
+		log.Infof("backend-[%s]: start read loop", bc.addr)
 
-		rsp, ok := data.(*raftcmdpb.Response)
-		if ok && len(rsp.UUID) > 0 {
-			log.Debugf("backend-[%s]: read a response: uuid=<%+v> resp=<%+v>",
-				bc.addr,
-				rsp.UUID,
-				rsp)
+		for {
+			data, err := bc.conn.Read()
+			if err != nil {
+				log.Errorf("backend-[%s]: read error: %s",
+					bc.addr,
+					err)
+				bc.close(false)
+				log.Infof("backend-[%s]: exit read loop", bc.addr)
+				return
 
-			bc.p.onResp(rsp)
+			}
+			rsp, ok := data.(*raftcmdpb.Response)
+			if ok && len(rsp.UUID) > 0 {
+				log.Debugf("backend-[%s]: read a response: uuid=<%+v> resp=<%+v>",
+					bc.addr,
+					rsp.UUID,
+					rsp)
+
+				bc.p.onResp(rsp)
+			}
 		}
-	}
+	}()
 }
 
 func (bc *backend) writeLoop() {
-	items := make([]interface{}, batch, batch)
+	go func() {
+		log.Infof("backend-[%s]: start write loop", bc.addr)
 
-	for {
-		n, err := bc.reqs.Get(batch, items)
-		if err != nil {
-			log.Errorf("backend-[%s]: exit write loop",
-				bc.addr)
-			return
-		}
+		items := make([]interface{}, batch, batch)
 
-		out := bc.conn.OutBuf()
-		for i := int64(0); i < n; i++ {
-			r := items[i].(*req)
-			codec.WriteProxyMessage(codec.RedisBegin, r.raftReq, out)
-			if log.DebugEnabled() && len(r.raftReq.UUID) > 0 {
-				log.Debugf("backend-[%s]: write req epoch=<%d> uuid=<%v>",
-					bc.addr,
-					r.raftReq.Epoch,
-					r.raftReq.UUID)
+		for {
+			n, err := bc.reqs.Get(batch, items)
+			if err != nil {
+				log.Infof("backend-[%s]: exit read loop", bc.addr)
+				return
 			}
-		}
-		err = bc.conn.WriteOutBuf()
-		if err != nil {
+
+			out := bc.conn.OutBuf()
 			for i := int64(0); i < n; i++ {
 				r := items[i].(*req)
-				r.errorDone(err)
+				log.Debugf("backend-[%s]: ready to send: %s",
+					bc.addr,
+					r.raftReq.String())
+				codec.WriteProxyMessage(codec.RedisBegin, r.raftReq, out)
 			}
+			err = bc.conn.WriteOutBuf()
+			if err != nil {
+				for i := int64(0); i < n; i++ {
+					r := items[i].(*req)
+					r.errorDone(err)
+				}
+				continue
+			}
+
+			log.Debugf("backend-[%s]: flushed",
+				bc.addr)
 		}
-	}
+	}()
 }
 
 func (p *RedisProxy) getConn(addr string) (*backend, error) {
@@ -183,17 +195,10 @@ func (p *RedisProxy) createConn(addr string) *backend {
 	return b
 }
 
-func (p *RedisProxy) sendHeartbeat(addr string, session goetty.IOSession) {
-	p.addToPing(addr)
-}
-
 func (p *RedisProxy) getConnectionCfg(addr string) *goetty.Conf {
 	return &goetty.Conf{
 		Addr: addr,
 		TimeoutConnectToServer: defaultConnectTimeout,
-		TimeoutWrite:           time.Second,
-		WriteTimeoutFn:         p.sendHeartbeat,
-		TimeWheel:              goetty.NewTimeoutWheel(goetty.WithTickInterval(time.Millisecond * 500)),
 	}
 }
 
@@ -217,8 +222,7 @@ func (p *RedisProxy) checkConnect(addr string, bc *backend) bool {
 		return false
 	}
 
-	go bc.readLoop()
-	go bc.writeLoop()
+	bc.readLoop()
 	p.Unlock()
 	return ok
 }
