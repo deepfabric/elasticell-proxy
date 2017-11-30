@@ -10,7 +10,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/deepfabric/elasticell/pkg/codec"
 	"github.com/deepfabric/elasticell/pkg/log"
 	"github.com/deepfabric/elasticell/pkg/pb/metapb"
 	"github.com/deepfabric/elasticell/pkg/pb/pdpb"
@@ -18,10 +17,10 @@ import (
 	"github.com/deepfabric/elasticell/pkg/pd"
 	"github.com/deepfabric/elasticell/pkg/pdapi"
 	"github.com/deepfabric/elasticell/pkg/util"
-	"github.com/deepfabric/elasticell/pkg/util/uuid"
 	"github.com/fagongzi/goetty"
 	"github.com/fagongzi/goetty/protocol/redis"
 	"github.com/pkg/errors"
+	uuid "github.com/satori/go.uuid"
 	"golang.org/x/net/context"
 )
 
@@ -59,11 +58,8 @@ type RedisProxy struct {
 
 	cfg             *Cfg
 	svr             *goetty.Server
-	notify          *goetty.Server
-	localOffset     uint64
-	serverOffset    uint64
-	inSyncNotify    bool
 	pdClient        *pd.Client
+	watcher         *pd.Watcher
 	supportCmds     map[string]struct{}
 	keyConvertFun   func([]byte, func([]byte) metapb.Cell) metapb.Cell
 	ranges          *util.CellTree
@@ -97,16 +93,16 @@ func NewRedisProxy(cfg *Cfg) *RedisProxy {
 		goetty.NewEmptyEncoder(),
 		goetty.NewInt64IDGenerator())
 
-	notifySvr := goetty.NewServer(cfg.AddrNotify,
-		&codec.ProxyDecoder{},
-		&codec.ProxyEncoder{},
-		goetty.NewInt64IDGenerator())
+	watcher := pd.NewWatcher(client,
+		cfg.AddrNotify,
+		pd.EventFlagCell|pd.EventFlagStore|pd.EventInit,
+		time.Duration(cfg.WatcherHeartbeatSec)*time.Second)
 
 	p := &RedisProxy{
 		pdClient:        client,
 		cfg:             cfg,
 		svr:             redisSvr,
-		notify:          notifySvr,
+		watcher:         watcher,
 		supportCmds:     make(map[string]struct{}),
 		routing:         newRouting(),
 		ranges:          util.NewCellTree(),
@@ -120,10 +116,6 @@ func NewRedisProxy(cfg *Cfg) *RedisProxy {
 		bcAddrs:         make([]string, 0),
 	}
 
-	for index := uint64(0); index < cfg.WorkerCount; index++ {
-		p.reqs[index] = &util.Queue{}
-	}
-
 	p.init()
 
 	return p
@@ -133,7 +125,6 @@ func NewRedisProxy(cfg *Cfg) *RedisProxy {
 func (p *RedisProxy) Start() error {
 	go p.listenToStop()
 	go p.readyToHandleReq(p.ctx)
-	go p.refreshStoresLoop()
 
 	return p.svr.Start(p.doConnection)
 }
@@ -150,6 +141,15 @@ func (p *RedisProxy) listenToStop() {
 	p.doStop()
 }
 
+func (p *RedisProxy) init() {
+	p.ctx, p.cancel = context.WithCancel(context.TODO())
+
+	p.initKeyConvert()
+	p.initSupportCMDs()
+	p.initWatcher()
+	p.initQueues()
+}
+
 func (p *RedisProxy) doStop() {
 	p.stopOnce.Do(func() {
 		defer p.stopWG.Done()
@@ -160,7 +160,7 @@ func (p *RedisProxy) doStop() {
 			log.Infof("stop: store connection closed, addr=<%s>", bc.addr)
 		}
 
-		p.notify.Stop()
+		p.watcher.Stop()
 		p.svr.Stop()
 		log.Infof("stop: tcp listen stopped")
 
@@ -168,227 +168,42 @@ func (p *RedisProxy) doStop() {
 	})
 }
 
-func (p *RedisProxy) init() {
-	p.ctx, p.cancel = context.WithCancel(context.TODO())
-
-	go p.notify.Start(p.doNotifyConnection)
-
-	_, err := p.pdClient.RegisterWatcher(context.TODO(), &pdpb.RegisterWatcherReq{
-		Addr: p.cfg.AddrNotify,
-	})
+func (p *RedisProxy) initWatcher() {
+	err := p.watcher.Start()
 	if err != nil {
-		log.Fatalf("bootstrap: registor watcher failed, errors:\n%+v", err)
+		log.Fatalf("bootstrap: init watcher failed, errors:\n%+v", err)
 	}
 
 	go func() {
-		ticker := time.NewTicker(time.Second * time.Duration(p.cfg.WatcherHeartbeatSec))
-		defer ticker.Stop()
-
 		for {
-			select {
-			case <-p.ctx.Done():
-				log.Infof("stop: watcher heartbeat stopped")
+			event, err := p.watcher.Ready()
+			if err != nil {
 				return
-			case <-ticker.C:
-				rsp, err := p.pdClient.WatcherHeartbeat(context.TODO(), &pdpb.WatcherHeartbeatReq{
-					Addr:   p.cfg.AddrNotify,
-					Offset: p.getLocalOffset(),
-				})
-				if err != nil {
-					log.Infof("watcher: watcher heartbeat failed: errors:\n%+v",
-						err)
-				} else if rsp.Paused {
-					// If we are paused from pd, we need refresh all ranges
-					p.resetLocalOffset(0)
-					p.refreshRanges()
-				}
+			}
+
+			switch event.Event {
+			case pd.EventInit:
+				p.refreshRanges()
+				p.refreshStores()
+			case pd.EventCellCreated:
+				p.refreshRange(event.CellEvent.Range)
+			case pd.EventCellLeaderChanged:
+				p.refreshRange(event.CellEvent.Range)
+			case pd.EventCellRangeChaned:
+				p.refreshRange(event.CellEvent.Range)
+			case pd.EventCellPeersChaned:
+				p.refreshRange(event.CellEvent.Range)
+			case pd.EventStoreUp:
+			case pd.EventStoreDown:
+			case pd.EventStoreTombstone:
 			}
 		}
 	}()
-
-	rsp, err := p.pdClient.GetInitParams(context.TODO(), new(pdpb.GetInitParamsReq))
-	if err != nil {
-		log.Fatalf("bootstrap: get init params failed, errors:\n%+v", err)
-	}
-
-	params := &pdapi.InitParams{
-		InitCellCount: 1,
-	}
-
-	if len(rsp.Params) > 0 {
-		err = json.Unmarshal(rsp.Params, params)
-		if err != nil {
-			log.Fatalf("bootstrap: create pd client failed, errors:\n%+v", err)
-		}
-	}
-
-	if params.InitCellCount > 1 {
-		p.keyConvertFun = util.Uint64Convert
-	} else {
-		p.keyConvertFun = util.NoConvert
-	}
-
-	for _, cmd := range p.cfg.SupportCMDs {
-		p.supportCmds[cmd] = struct{}{}
-	}
-
-	p.refreshRanges()
-	p.refreshStores()
 }
 
-func (p *RedisProxy) refreshStores() {
-	var stores []string
-	var rsp *pdpb.ListStoreRsp
-	var err error
-	if rsp, err = p.pdClient.ListStore(context.TODO(), &pdpb.ListStoreReq{}); err != nil {
-		log.Errorf("ListStore failed with error\n%+v", err)
-	}
-	stores = make([]string, 0)
-	for _, s := range rsp.Stores {
-		stores = append(stores, s.ClientAddress)
-	}
-	sort.Strings(stores)
-	p.Lock()
-	p.bcAddrs = stores
-	p.Unlock()
-}
-
-func (p *RedisProxy) refreshStoresLoop() {
-	tickChan := time.Tick(10 * time.Second)
-	for {
-		select {
-		case <-tickChan:
-			p.refreshStores()
-		}
-	}
-}
-
-func (p *RedisProxy) getSyncEpoch() uint64 {
-	p.RLock()
-	v := p.syncEpoch
-	p.RUnlock()
-	return v
-}
-
-func (p *RedisProxy) refreshRange(r *pdpb.Range) {
-	p.Lock()
-	p.doRefreshRange(r)
-	p.syncEpoch++
-	p.Unlock()
-}
-
-func (p *RedisProxy) doRefreshRange(r *pdpb.Range) {
-	p.ranges.Update(r.Cell)
-	p.cellLeaderAddrs[r.Cell.ID] = r.LeaderStore.ClientAddress
-	p.stores[r.LeaderStore.ID] = &r.LeaderStore
-}
-
-func (p *RedisProxy) refreshRanges() {
-	old := p.getSyncEpoch()
-	log.Infof("pd-sync: try to sync, epoch=<%d>", old)
-
-	if old < p.syncEpoch {
-		log.Infof("pd-sync: already sync, skip, old=<%d> new=<%d>", old, p.syncEpoch)
-		return
-	}
-
-	p.Lock()
-	rsp, err := p.pdClient.GetLastRanges(context.TODO(), &pdpb.GetLastRangesReq{})
-	if err != nil {
-		log.Fatalf("bootstrap: get cell ranges from pd failed, errors:\n%+v", err)
-	}
-
-	p.clean()
-	for _, r := range rsp.Ranges {
-		p.doRefreshRange(r)
-	}
-	p.syncEpoch++
-
-	log.Infof("pd-sync: sync complete, epoch=%d", p.syncEpoch)
-	p.Unlock()
-}
-
-func (p *RedisProxy) clean() {
-	p.stores = make(map[uint64]*metapb.Store)
-	p.cellLeaderAddrs = make(map[uint64]string)
-}
-
-func (p *RedisProxy) resetLocalOffset(offset uint64) {
-	p.Lock()
-	p.localOffset = offset
-	log.Infof("notify: offset reset to: %d", offset)
-	p.Unlock()
-}
-
-func (p *RedisProxy) getLocalOffset() uint64 {
-	p.RLock()
-	v := p.localOffset
-	p.RUnlock()
-
-	return v
-}
-
-func (p *RedisProxy) resetServerOffset(offset uint64) {
-	p.serverOffset = offset
-}
-
-func (p *RedisProxy) doSync(addr string, conn goetty.IOSession) error {
-	if !p.inSyncNotify {
-		err := conn.Write(&pdpb.WatcherNotifySync{
-			Offset: p.getLocalOffset(),
-		})
-		if err != nil {
-			return err
-		}
-		p.inSyncNotify = true
-	}
-
-	return nil
-}
-
-func (p *RedisProxy) doNotifyConnection(conn goetty.IOSession) error {
-	addr := conn.RemoteAddr()
-	p.resetLocalOffset(0)
-
-	for {
-		msg, err := conn.Read()
-		if err != nil {
-			log.Errorf("notify-[%s]: read notify failed, errors\n %+v",
-				addr,
-				err)
-			p.refreshRanges()
-			return err
-		}
-		if nt, ok := msg.(*pdpb.WatcherNotify); ok {
-			if nt.Offset == 0 || nt.Offset > p.getLocalOffset() {
-				p.resetServerOffset(nt.Offset)
-				err := p.doSync(addr, conn)
-				if err != nil {
-					log.Errorf("notify-[%s]: sync notify failed, errors\n %+v",
-						addr,
-						err)
-					return err
-				}
-			}
-		} else if rsp, ok := msg.(*pdpb.WatcherNotifyRsp); ok {
-			p.inSyncNotify = false
-
-			for _, r := range rsp.Ranges {
-				p.refreshRange(r)
-			}
-
-			p.resetLocalOffset(rsp.Offset)
-
-			if p.getLocalOffset() < p.serverOffset {
-				err := p.doSync(addr, conn)
-				if err != nil {
-					log.Errorf("notify-[%s]: sync notify failed, errors\n %+v",
-						addr,
-						err)
-					return err
-				}
-			}
-		}
+func (p *RedisProxy) initQueues() {
+	for index := uint64(0); index < p.cfg.WorkerCount; index++ {
+		p.reqs[index] = &util.Queue{}
 	}
 }
 
@@ -434,6 +249,103 @@ func (p *RedisProxy) doConnection(session goetty.IOSession) error {
 			retries: 0,
 		})
 	}
+}
+
+func (p *RedisProxy) initKeyConvert() {
+	rsp, err := p.pdClient.GetInitParams(context.TODO(), new(pdpb.GetInitParamsReq))
+	if err != nil {
+		log.Fatalf("bootstrap: get init params failed, errors:\n%+v", err)
+	}
+
+	params := &pdapi.InitParams{
+		InitCellCount: 1,
+	}
+
+	if len(rsp.Params) > 0 {
+		err = json.Unmarshal(rsp.Params, params)
+		if err != nil {
+			log.Fatalf("bootstrap: create pd client failed, errors:\n%+v", err)
+		}
+	}
+
+	if params.InitCellCount > 1 {
+		p.keyConvertFun = util.Uint64Convert
+	} else {
+		p.keyConvertFun = util.NoConvert
+	}
+}
+
+func (p *RedisProxy) initSupportCMDs() {
+	for _, cmd := range p.cfg.SupportCMDs {
+		p.supportCmds[cmd] = struct{}{}
+	}
+}
+
+func (p *RedisProxy) refreshStores() {
+	var stores []string
+	var rsp *pdpb.ListStoreRsp
+	var err error
+	if rsp, err = p.pdClient.ListStore(context.TODO(), &pdpb.ListStoreReq{}); err != nil {
+		log.Errorf("ListStore failed with error\n%+v", err)
+	}
+	stores = make([]string, 0)
+	for _, s := range rsp.Stores {
+		stores = append(stores, s.ClientAddress)
+	}
+	sort.Strings(stores)
+	p.Lock()
+	p.bcAddrs = stores
+	p.Unlock()
+}
+
+func (p *RedisProxy) refreshRanges() {
+	old := p.getSyncEpoch()
+	log.Infof("pd-sync: try to sync, epoch=<%d>", old)
+
+	if old < p.syncEpoch {
+		log.Infof("pd-sync: already sync, skip, old=<%d> new=<%d>", old, p.syncEpoch)
+		return
+	}
+
+	p.Lock()
+	rsp, err := p.pdClient.GetLastRanges(context.TODO(), &pdpb.GetLastRangesReq{})
+	if err != nil {
+		log.Fatalf("bootstrap: get cell ranges from pd failed, errors:\n%+v", err)
+	}
+
+	p.clean()
+	for _, r := range rsp.Ranges {
+		p.doRefreshRange(r)
+	}
+	p.syncEpoch++
+
+	log.Infof("pd-sync: sync complete, epoch=%d", p.syncEpoch)
+	p.Unlock()
+}
+
+func (p *RedisProxy) refreshRange(r *pdpb.Range) {
+	p.Lock()
+	p.doRefreshRange(r)
+	p.syncEpoch++
+	p.Unlock()
+}
+
+func (p *RedisProxy) doRefreshRange(r *pdpb.Range) {
+	p.ranges.Update(r.Cell)
+	p.cellLeaderAddrs[r.Cell.ID] = r.LeaderStore.ClientAddress
+	p.stores[r.LeaderStore.ID] = &r.LeaderStore
+}
+
+func (p *RedisProxy) clean() {
+	p.stores = make(map[uint64]*metapb.Store)
+	p.cellLeaderAddrs = make(map[uint64]string)
+}
+
+func (p *RedisProxy) getSyncEpoch() uint64 {
+	p.RLock()
+	v := p.syncEpoch
+	p.RUnlock()
+	return v
 }
 
 func (p *RedisProxy) addToPing(target string) {

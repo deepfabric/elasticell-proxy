@@ -22,8 +22,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/deepfabric/indexer/cql"
-
 	"github.com/deepfabric/elasticell/pkg/log"
 	"github.com/deepfabric/elasticell/pkg/pb/metapb"
 	"github.com/deepfabric/elasticell/pkg/pb/mraft"
@@ -39,6 +37,7 @@ import (
 	"github.com/deepfabric/etcd/raft/raftpb"
 	datastructures "github.com/deepfabric/go-datastructures"
 	"github.com/deepfabric/indexer"
+	"github.com/deepfabric/indexer/cql"
 	"github.com/pkg/errors"
 	"golang.org/x/net/context"
 )
@@ -58,52 +57,37 @@ var (
 
 // Store is the store for raft
 type Store struct {
-	id        uint64
-	clusterID uint64
-	startAt   uint32
-	meta      metapb.Store
-
-	snapshotManager SnapshotManager
-
-	pdClient *pd.Client
-
-	keyConvertFun func([]byte, func([]byte) metapb.Cell) metapb.Cell
-	replicatesMap *cellPeersMap // cellid -> peer replicate
-	keyRanges     *util.CellTree
-	peerCache     *peerCacheMap
-	delegates     *applyDelegateMap
-
-	pendingLock      sync.RWMutex
-	pendingSnapshots map[uint64]mraft.SnapshotMessageHeader
-
-	trans  *transport
-	engine storage.Driver
-	runner *util.Runner
-
-	redisReadHandles  map[raftcmdpb.CMDType]func(*raftcmdpb.Request) *raftcmdpb.Response
-	redisWriteHandles map[raftcmdpb.CMDType]func(*applyContext, *raftcmdpb.Request) *raftcmdpb.Response
-
+	id                 uint64
+	clusterID          uint64
+	startAt            uint32
+	meta               metapb.Store
+	snapshotManager    SnapshotManager
+	pdClient           *pd.Client
+	keyConvertFun      func([]byte, func([]byte) metapb.Cell) metapb.Cell
+	replicatesMap      *cellPeersMap // cellid -> peer replicate
+	keyRanges          *util.CellTree
+	peerCache          *peerCacheMap
+	delegates          *applyDelegateMap
+	pendingLock        sync.RWMutex
+	pendingSnapshots   map[uint64]mraft.SnapshotMessageHeader
+	trans              *transport
+	engine             storage.Driver
+	runner             *util.Runner
+	redisReadHandles   map[raftcmdpb.CMDType]func(*raftcmdpb.Request) *raftcmdpb.Response
+	redisWriteHandles  map[raftcmdpb.CMDType]func(*applyContext, *raftcmdpb.Request) *raftcmdpb.Response
 	sendingSnapCount   uint32
 	reveivingSnapCount uint32
-
-	rwlock         sync.RWMutex
-	indices        map[string]*pdpb.IndexDef //index name -> IndexDef
-	reExps         map[string]*regexp.Regexp //index name -> Regexp
-	docProts       map[string]*cql.Document  //index name -> cql.Document
-	indexers       map[uint64]*IndexerExt    // cell id -> IndexerExt
-	cellIDToStores map[uint64][]uint64       // cell id -> non-leader store ids, fetched from PD
-	storeIDToCells map[uint64][]uint64       // store id -> leader cell ids, fetched from PD
-	syncEpoch      uint64
-
-	queryStates  map[string]*QueryState // query UUID -> query state
-	queryReqChan chan *QueryRequestCb
-	queryRspChan chan *querypb.QueryRsp
-}
-
-// IndexerExt is per PeerReplicate
-type IndexerExt struct {
-	Indexer   *indexer.Indexer
-	NextDocID uint64
+	rwlock             sync.RWMutex
+	indices            map[string]*pdpb.IndexDef   //index name -> IndexDef
+	reExps             map[string]*regexp.Regexp   //index name -> Regexp
+	docProts           map[string]*cql.Document    //index name -> cql.Document
+	indexers           map[uint64]*indexer.Indexer // cell id -> Indexer
+	cellIDToStores     map[uint64][]uint64         // cell id -> non-leader store ids, fetched from PD
+	storeIDToCells     map[uint64][]uint64         // store id -> leader cell ids, fetched from PD
+	syncEpoch          uint64
+	queryStates        map[string]*QueryState // query UUID -> query state
+	queryReqChan       chan *QueryRequestCb
+	queryRspChan       chan *querypb.QueryRsp
 }
 
 // DocPtr is alias of querypb.Document
@@ -175,7 +159,7 @@ func NewStore(clusterID uint64, pdClient *pd.Client, meta metapb.Store, engine s
 
 	s.indices = make(map[string]*pdpb.IndexDef)
 	s.reExps = make(map[string]*regexp.Regexp)
-	s.indexers = make(map[uint64]*IndexerExt)
+	s.indexers = make(map[uint64]*indexer.Indexer)
 	s.docProts = make(map[string]*cql.Document)
 	s.cellIDToStores = make(map[uint64][]uint64)
 	s.storeIDToCells = make(map[uint64][]uint64)
@@ -184,12 +168,10 @@ func NewStore(clusterID uint64, pdClient *pd.Client, meta metapb.Store, engine s
 	s.queryRspChan = make(chan *querypb.QueryRsp, queryChanSize)
 
 	s.initRedisHandle()
-	s.init()
-
 	return s
 }
 
-func (s *Store) init() {
+func (s *Store) startCells() {
 	totalCount := 0
 	tomebstoneCount := 0
 	applyingCount := 0
@@ -273,6 +255,9 @@ func (s *Store) Start() {
 	go s.startTransfer()
 	<-s.trans.server.Started()
 	log.Infof("bootstrap: transfer started")
+
+	s.startCells()
+	log.Infof("bootstrap: cells started")
 
 	s.startStoreHeartbeatTask()
 	log.Infof("bootstrap: ready to handle store heartbeat")
@@ -1119,20 +1104,7 @@ func (s *Store) handleCellSplitCheck() {
 			return true, nil
 		}
 
-		log.Debugf("raftstore-split[cell-%d]: cell need to check whether should split, threshold=<%d> max=<%d>",
-			pr.cellID,
-			globalCfg.ThresholdSplitCheckBytes,
-			pr.sizeDiffHint)
-
-		err := pr.startSplitCheckJob()
-		if err != nil {
-			log.Errorf("raftstore-split[cell-%d]: add split check job failed, errors:\n %+v",
-				pr.cellID,
-				err)
-			return false, err
-		}
-
-		pr.sizeDiffHint = 0
+		pr.addAction(checkSplit)
 		return true, nil
 	})
 }
@@ -1155,95 +1127,13 @@ func (s *Store) handleCellReport() {
 }
 
 func (s *Store) handleRaftGCLog() {
-	var gcLogCount uint64
-
 	s.replicatesMap.foreach(func(pr *PeerReplicate) (bool, error) {
-		if !pr.isLeader() {
-			return true, nil
+		if pr.isLeader() {
+			pr.addAction(checkCompact)
 		}
-
-		// Leader will replicate the compact log command to followers,
-		// If we use current replicated_index (like 10) as the compact index,
-		// when we replicate this log, the newest replicated_index will be 11,
-		// but we only compact the log to 10, not 11, at that time,
-		// the first index is 10, and replicated_index is 11, with an extra log,
-		// and we will do compact again with compact index 11, in cycles...
-		// So we introduce a threshold, if replicated index - first index > threshold,
-		// we will try to compact log.
-		// raft log entries[..............................................]
-		//                  ^                                       ^
-		//                  |-----------------threshold------------ |
-		//              first_index                         replicated_index
-
-		var replicatedIdx uint64
-		for _, p := range pr.rn.Status().Progress {
-			if replicatedIdx == 0 {
-				replicatedIdx = p.Match
-			}
-
-			if p.Match < replicatedIdx {
-				replicatedIdx = p.Match
-			}
-		}
-
-		// When an election happened or a new peer is added, replicated_idx can be 0.
-		if replicatedIdx > 0 {
-			lastIdx := pr.rn.LastIndex()
-			if lastIdx < replicatedIdx {
-				log.Fatalf("raft-log-gc: expect last index >= replicated index, last=<%d> replicated=<%d>",
-					lastIdx,
-					replicatedIdx)
-			}
-
-			raftLogLagHistogram.Observe(float64(lastIdx - replicatedIdx))
-		}
-
-		var compactIdx uint64
-		appliedIdx := pr.ps.getAppliedIndex()
-		firstIdx, _ := pr.ps.FirstIndex()
-
-		if replicatedIdx < firstIdx ||
-			replicatedIdx-firstIdx <= globalCfg.ThresholdCompact {
-			return true, nil
-		}
-
-		if appliedIdx > firstIdx &&
-			appliedIdx-firstIdx >= globalCfg.LimitCompactCount {
-			compactIdx = appliedIdx
-		} else if pr.raftLogSizeHint >= globalCfg.LimitCompactBytes {
-			compactIdx = appliedIdx
-		} else {
-			compactIdx = replicatedIdx
-		}
-
-		// Have no idea why subtract 1 here, but original code did this by magic.
-		if compactIdx == 0 {
-			log.Fatal("raft-log-gc: unexpect compactIdx")
-		}
-
-		// avoid leader send snapshot to the a little lag peer.
-		if compactIdx > replicatedIdx && (compactIdx-replicatedIdx) <= globalCfg.LimitCompactLag {
-			compactIdx = replicatedIdx
-		}
-
-		compactIdx--
-		if compactIdx < firstIdx {
-			// In case compactIdx == firstIdx before subtraction.
-			return true, nil
-		}
-
-		gcLogCount += compactIdx - firstIdx
-
-		term, _ := pr.rn.Term(compactIdx)
-
-		pr.onAdminRequest(newCompactLogRequest(compactIdx, term))
 
 		return true, nil
 	})
-
-	if gcLogCount > 0 {
-		raftLogCompactCounter.Add(float64(gcLogCount))
-	}
 }
 
 // SetKeyConvertFun set key convert function

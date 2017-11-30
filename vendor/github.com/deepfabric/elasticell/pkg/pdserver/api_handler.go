@@ -56,7 +56,7 @@ func (s *Server) GetSystem() (*pdapi.System, error) {
 	}
 
 	system.AlreadyBootstrapped = true
-	system.MaxReplicas = s.cfg.Schedule.MaxReplicas
+	system.MaxReplicas = s.cfg.LimitReplicas
 	system.OperatorCount = cluster.coordinator.getOperatorCount()
 	system.InitParams = params
 
@@ -197,6 +197,7 @@ func (s *Server) DeleteStore(id uint64, force bool) error {
 			store.Meta.State.String(),
 			store.Meta.Address)
 		cluster.cache.getStoreCache().updateStoreInfo(store)
+		cluster.cache.notifyStoreRange(id)
 	}
 
 	return nil

@@ -17,7 +17,7 @@
   branch = "master"
   name = "github.com/deepfabric/elasticell"
   packages = ["pkg/codec","pkg/log","pkg/pb","pkg/pb/errorpb","pkg/pb/metapb","pkg/pb/mraft","pkg/pb/pdpb","pkg/pb/querypb","pkg/pb/raftcmdpb","pkg/pd","pkg/pdapi","pkg/pool","pkg/redis","pkg/util","pkg/util/uuid"]
-  revision = "b8a0d14f4e152409ae0e4aa84c3efea6394494f5"
+  revision = "de751c6f6772c612502ed27639a3dbfb6a04be64"
 
 [[projects]]
   name = "github.com/deepfabric/etcd"
