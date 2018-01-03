@@ -11,6 +11,8 @@
     "retryDuration": 2000,
     "workerCount": 64,
     "supportCMDs": [
+        "mget",
+        "mset",
         "query",
         "ping",
         "set",

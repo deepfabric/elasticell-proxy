@@ -17,13 +17,17 @@ type redisSession struct {
 	session goetty.IOSession
 	resps   *util.Queue
 	addr    string
+
+	aggLock      sync.RWMutex
+	aggregations map[string]*aggregationReq
 }
 
 func newSession(session goetty.IOSession) *redisSession {
 	return &redisSession{
-		session: session,
-		resps:   &util.Queue{},
-		addr:    session.RemoteAddr(),
+		session:      session,
+		resps:        &util.Queue{},
+		addr:         session.RemoteAddr(),
+		aggregations: make(map[string]*aggregationReq),
 	}
 }
 
@@ -34,8 +38,26 @@ func (rs *redisSession) close() {
 	rs.Unlock()
 }
 
+func (rs *redisSession) addAggregation(id []byte, req *aggregationReq) {
+	rs.aggLock.Lock()
+	rs.aggregations[string(id)] = req
+	rs.aggLock.Unlock()
+}
+
 func (rs *redisSession) resp(rsp *raftcmdpb.Response) {
-	rs.resps.Put(rsp)
+	if !isAggregationPart(rsp.UUID) {
+		rs.resps.Put(rsp)
+		return
+	}
+
+	id, index := parseAggregationPart(rsp.UUID)
+	rs.aggLock.RLock()
+	if req, ok := rs.aggregations[string(id)]; ok {
+		if req.addPart(index, rsp) {
+			rs.resps.Put(req.merge())
+		}
+	}
+	rs.aggLock.RUnlock()
 }
 
 func (rs *redisSession) errorResp(err error) {

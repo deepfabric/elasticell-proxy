@@ -40,6 +40,25 @@ type req struct {
 	retries int
 }
 
+func newReqUUID(id []byte, cmd redis.Command, rs *redisSession) *req {
+	return &req{
+		raftReq: &raftcmdpb.Request{
+			UUID: id,
+			Cmd:  cmd,
+		},
+		rs:      rs,
+		retries: 0,
+	}
+}
+
+func newReq(cmd redis.Command, rs *redisSession) *req {
+	return newReqUUID(newID(), cmd, rs)
+}
+
+func newID() []byte {
+	return uuid.NewV4().Bytes()
+}
+
 func (r *req) errorDone(err error) {
 	if r.rs != nil {
 		r.rs.errorResp(err)
@@ -60,6 +79,7 @@ type RedisProxy struct {
 	svr             *goetty.Server
 	pdClient        *pd.Client
 	watcher         *pd.Watcher
+	aggregationCmds map[string]func(*redisSession, redis.Command) (bool, error)
 	supportCmds     map[string]struct{}
 	keyConvertFun   func([]byte, func([]byte) metapb.Cell) metapb.Cell
 	ranges          *util.CellTree
@@ -103,6 +123,7 @@ func NewRedisProxy(cfg *Cfg) *RedisProxy {
 		cfg:             cfg,
 		svr:             redisSvr,
 		watcher:         watcher,
+		aggregationCmds: make(map[string]func(*redisSession, redis.Command) (bool, error)),
 		supportCmds:     make(map[string]struct{}),
 		routing:         newRouting(),
 		ranges:          util.NewCellTree(),
@@ -234,20 +255,26 @@ func (p *RedisProxy) doConnection(session goetty.IOSession) error {
 			log.Debugf("redis-[%s]: read a cmd: %s", addr, cmd.ToString())
 		}
 
-		_, ok := p.supportCmds[cmd.CmdString()]
+		cmdStr := cmd.CmdString()
+		_, ok := p.supportCmds[cmdStr]
 		if !ok {
-			rs.errorResp(fmt.Errorf("command not support: %s", cmd.CmdString()))
+			rs.errorResp(fmt.Errorf("command not support: %s", cmdStr))
 			continue
 		}
 
-		p.addToForward(&req{
-			raftReq: &raftcmdpb.Request{
-				UUID: uuid.NewV4().Bytes(),
-				Cmd:  cmd,
-			},
-			rs:      rs,
-			retries: 0,
-		})
+		if fn, ok := p.aggregationCmds[cmdStr]; ok {
+			need, err := fn(rs, cmd)
+			if err != nil {
+				rs.errorResp(err)
+				continue
+			}
+
+			if need {
+				continue
+			}
+		}
+
+		p.addToForward(newReq(cmd, rs))
 	}
 }
 
@@ -279,6 +306,9 @@ func (p *RedisProxy) initSupportCMDs() {
 	for _, cmd := range p.cfg.SupportCMDs {
 		p.supportCmds[cmd] = struct{}{}
 	}
+
+	p.aggregationCmds["mget"] = p.doMGet
+	p.aggregationCmds["mset"] = p.doMSet
 }
 
 func (p *RedisProxy) refreshStores() {
