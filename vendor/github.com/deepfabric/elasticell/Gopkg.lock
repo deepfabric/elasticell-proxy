@@ -89,19 +89,13 @@
   branch = "master"
   name = "github.com/deepfabric/indexer"
   packages = [".","cql","cql/parser"]
-  revision = "3ddd2f790ab2f3bd0989b8444bb7181e4a23931d"
-
-[[projects]]
-  branch = "master"
-  name = "github.com/pilosa/pilosa"
-  packages = ["internal","pql","roaring","statik"]
-  revision = "0dfbba370dcc6d4f1f366083251e3bc539afb122"
+  revision = "a70335bd2b7cb0315680a8ca02e6317ec9d2379a"
 
 [[projects]]
   branch = "master"
   name = "github.com/fagongzi/goetty"
   packages = [".","protocol/redis"]
-  revision = "2e369222b4f4d40511993dea44d7110d89a3c986"
+  revision = "be30ec1d931e852f555da1e37114deda39174ec1"
 
 [[projects]]
   branch = "master"
@@ -200,6 +194,12 @@
   revision = "53be0d36a84c2a886ca057d34b6aa4468df9ccb4"
 
 [[projects]]
+  branch = "master"
+  name = "github.com/pilosa/pilosa"
+  packages = [".","diagnostics","internal","pql","roaring","statik"]
+  revision = "0dfbba370dcc6d4f1f366083251e3bc539afb122"
+
+[[projects]]
   name = "github.com/pingcap/check"
   packages = ["."]
   revision = "9b266636177e249ec28b0aeffe8e86bc272bb481"
@@ -247,6 +247,12 @@
   revision = "423a8ff2a6da39265b3d05d36ca7e3f18fc8d733"
 
 [[projects]]
+  name = "github.com/sony/gobreaker"
+  packages = ["."]
+  revision = "e9556a45379ef1da12e54847edb2fb3d7d566f36"
+  version = "0.3.0"
+
+[[projects]]
   name = "github.com/stretchr/testify"
   packages = ["assert"]
   revision = "890a5c3458b43e6104ff5da8dfa139d013d77544"
@@ -284,6 +290,12 @@
   revision = "a6577fac2d73be281a500b310739095313165611"
 
 [[projects]]
+  branch = "master"
+  name = "golang.org/x/sync"
+  packages = ["semaphore"]
+  revision = "fd80eb99c8f653c847d294a001bdf2a3a6f768f5"
+
+[[projects]]
   name = "golang.org/x/sys"
   packages = ["unix"]
   revision = "99f16d856c9836c42d24e7ab64ea72916925fa97"
@@ -305,15 +317,9 @@
   packages = ["."]
   revision = "a3f3340b5840cee44f372bddb5880fcbc419b46a"
 
-[[projects]]
-  name = "github.com/sony/gobreaker"
-  packages = ["."]
-  revision = "e9556a45379ef1da12e54847edb2fb3d7d566f36"
-  version = "0.3.0"
-
 [solve-meta]
   analyzer-name = "dep"
   analyzer-version = 1
-  inputs-digest = "e76e7bfd167a4d5915ee12e7941b347534f0b0a03da255c493494e1c751fae18"
+  inputs-digest = "9ef8169c53adfb8260959c210d7306be3fa690e7d010ad3a8f944221a84bccc9"
   solver-name = "gps-cdcl"
   solver-version = 1

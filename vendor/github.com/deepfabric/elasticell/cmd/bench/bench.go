@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
+	_ "net/http/pprof"
 	"os"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/fagongzi/goetty"
@@ -17,12 +17,11 @@ import (
 
 var (
 	con            = flag.Int64("c", 0, "The clients.")
-	cn             = flag.Int64("cn", 100, "The concurrency per client.")
+	cn             = flag.Int64("cn", 64, "The concurrency per client.")
 	readWeight     = flag.Int("r", 1, "read weight")
 	writeWeight    = flag.Int("w", 1, "write weight")
 	num            = flag.Int64("n", 0, "The total number.")
 	size           = flag.Int("v", 256, "The value size.")
-	batch          = flag.Int("b", 64, "The command batch size.")
 	readTimeout    = flag.Int("rt", 30, "The timeout for read in seconds")
 	writeTimeout   = flag.Int("wt", 30, "The timeout for read in seconds")
 	connectTimeout = flag.Int("ct", 10, "The timeout for connect to server")
@@ -86,14 +85,6 @@ func main() {
 }
 
 func startG(total int64, wg, complate *sync.WaitGroup, ready chan struct{}, ans *analysis, proxy string) {
-	var onlyRead, onlyWrite bool
-
-	if *readWeight == 0 {
-		onlyWrite = true
-	} else if *writeWeight == 0 {
-		onlyRead = true
-	}
-
 	if total <= 0 {
 		total = math.MaxInt64
 	}
@@ -113,143 +104,94 @@ func startG(total int64, wg, complate *sync.WaitGroup, ready chan struct{}, ans 
 	wg.Done()
 	<-ready
 
-	q := newQueue()
+	value := make([]byte, *size)
+	doRead := true
+	c := *readWeight * 100
+	start := time.Now()
+	r := rand.New(rand.NewSource(time.Now().UnixNano()))
 
-	go func() {
-		defer complate.Done()
-		var received int64
-		var min, max int64
-		max = 0
-		min = math.MaxInt64
+	for index := int64(0); index < total; index += *cn {
+		for k := int64(0); k < *cn; k++ {
+			key := fmt.Sprintf("%d", r.Int63())
 
-		for {
-			_, err := conn.ReadTimeout(time.Second * time.Duration(*readTimeout))
+			for {
+				if c > 0 {
+					break
+				}
+
+				if c == 0 {
+					doRead = !doRead
+					if doRead {
+						c = *readWeight * 100
+					} else {
+						c = *writeWeight * 100
+					}
+				}
+			}
+
+			if doRead {
+				redis.WriteCommand(conn, "get", key)
+			} else {
+				for i := 0; i < *size; i++ {
+					value[i] = byte((index + k) % 0xff)
+				}
+				redis.WriteCommand(conn, "set", key, value)
+			}
+			c--
+		}
+
+		err := conn.WriteOutBuf()
+		if err != nil {
+			fmt.Printf("%+v\n", err)
+			os.Exit(1)
+		}
+		s := time.Now()
+		ans.incrSent(*cn)
+
+		for k := int64(0); k < *cn; k++ {
+			_, err = conn.ReadTimeout(time.Second * time.Duration(*readTimeout))
 			if err != nil {
 				fmt.Printf("%+v\n", err)
 				os.Exit(1)
 			}
 
-			now := time.Now()
-			cu := now.Sub(*q.pop()).Nanoseconds()
-			if cu > max {
-				max = cu
-			}
-
-			if cu < min {
-				min = cu
-			}
-
-			received++
-			ans.incrRecv()
-
-			if received == total {
-				ans.set(min, max)
-				return
-			} else if received%10000 == 0 {
-				ans.set(min, max)
-			}
-		}
-	}()
-
-	value := make([]byte, *size)
-	for i := 0; i < *size; i++ {
-		value[i] = '0'
-	}
-
-	var index, lastIndex int64
-
-	start := time.Now()
-	st := start
-	b := 0
-	ctl := 0
-	doWrite := true
-	rc := *readWeight * 100
-	wc := *writeWeight * 100
-
-	for ; index < total; index++ {
-		key := fmt.Sprintf("%d", rand.Int63())
-
-		if onlyRead {
-			redis.WriteCommand(conn, "get", key)
-		} else if onlyWrite {
-			redis.WriteCommand(conn, "set", key, value)
-		} else {
-			limit := rc
-
-			if doWrite {
-				limit = wc
-				redis.WriteCommand(conn, "get", key)
-			} else {
-				redis.WriteCommand(conn, "set", key, value)
-			}
-
-			if ctl == limit {
-				ctl = 0
-				doWrite = !doWrite
-			}
-
-			ctl++
-		}
-
-		b++
-		if b == *batch {
-			flush(conn, q, b)
-			ans.incrSent(int64(b))
-			b = 0
-		}
-
-		if index-lastIndex >= *cn {
-			n := time.Now()
-			d := n.Sub(st)
-			st = n
-			time.Sleep(time.Second - d)
-			lastIndex = index
+			ans.incrRecv(time.Now().Sub(s).Nanoseconds())
 		}
 	}
 
-	if b > 0 {
-		ans.incrSent(int64(b))
-		flush(conn, q, b)
-	}
 	end := time.Now()
 	fmt.Printf("%s sent %d reqs\n", end.Sub(start), total)
 }
 
-func flush(conn goetty.IOSession, q *queue, b int) {
-	err := conn.WriteOutBuf()
-	if err != nil {
-		fmt.Printf("%+v\n", err)
-		os.Exit(1)
-	}
-
-	n := time.Now()
-	for index := 0; index < b; index++ {
-		q.add(&n)
-	}
-}
-
 type analysis struct {
 	sync.RWMutex
-	startAt                             time.Time
-	max, min, avg, recv, sent, prevRecv int64
+	startAt                            time.Time
+	recv, sent, prevRecv               int64
+	avgLatency, maxLatency, minLatency int64
+	totalCost, prevCost                int64
 }
 
 func newAnalysis() *analysis {
-	return &analysis{
-		max: 0,
-		min: math.MaxInt64,
-	}
+	return &analysis{}
 }
 
-func (a *analysis) set(min, max int64) {
-	a.Lock()
-	if max > a.max {
-		a.max = max
+func (a *analysis) setLatency(latency int64) {
+	if a.minLatency == 0 || a.minLatency > latency {
+		a.minLatency = latency
 	}
 
-	if min < a.min {
-		a.min = min
+	if a.maxLatency == 0 || a.maxLatency < latency {
+		a.maxLatency = latency
 	}
+
+	a.totalCost += latency
+	a.avgLatency = a.totalCost / a.recv
+}
+
+func (a *analysis) reset() {
+	a.Lock()
+	a.maxLatency = 0
+	a.minLatency = 0
 	a.Unlock()
 }
 
@@ -257,58 +199,31 @@ func (a *analysis) start() {
 	a.startAt = time.Now()
 }
 
-func (a *analysis) incrRecv() {
-	atomic.AddInt64(&a.recv, 1)
+func (a *analysis) incrRecv(latency int64) {
+	a.Lock()
+	a.recv++
+	a.setLatency(latency)
+	a.Unlock()
 }
 
 func (a *analysis) incrSent(n int64) {
-	atomic.AddInt64(&a.sent, n)
-}
-
-func (a *analysis) calc(total int64) {
-	if total != 0 {
-		a.avg = time.Second.Nanoseconds() / total
-	}
+	a.Lock()
+	a.sent += n
+	a.Unlock()
 }
 
 func (a *analysis) print() {
-	prev := atomic.LoadInt64(&a.prevRecv)
-	recv := atomic.LoadInt64(&a.recv)
-	sent := atomic.LoadInt64(&a.sent)
-	atomic.StoreInt64(&a.prevRecv, recv)
-
-	a.calc(recv - prev)
-
-	fmt.Printf("[%d, %d, %d], tps: <%d>/s, avg: %s \n",
-		sent,
-		recv,
-		(sent - recv),
-		(recv - prev),
-		time.Duration(a.avg))
-}
-
-type queue struct {
-	sync.RWMutex
-	starts []*time.Time
-	index  int64
-}
-
-func newQueue() *queue {
-	return &queue{}
-}
-
-func (q *queue) add(start *time.Time) {
-	q.Lock()
-	q.starts = append(q.starts, start)
-	q.index++
-	q.Unlock()
-}
-
-func (q *queue) pop() *time.Time {
-	q.Lock()
-	value := q.starts[0]
-	q.starts[0] = nil
-	q.starts = q.starts[1:]
-	q.Unlock()
-	return value
+	a.Lock()
+	fmt.Printf("[%d, %d, %d](%d s), tps: <%d>/s, avg: %s, min: %s, max: %s \n",
+		a.sent,
+		a.recv,
+		(a.sent - a.recv),
+		int(time.Now().Sub(a.startAt).Seconds()),
+		(a.recv - a.prevRecv),
+		time.Duration(a.avgLatency),
+		time.Duration(a.minLatency),
+		time.Duration(a.maxLatency))
+	a.prevRecv = a.recv
+	a.prevCost = a.totalCost
+	a.Unlock()
 }

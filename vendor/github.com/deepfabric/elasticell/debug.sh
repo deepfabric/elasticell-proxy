@@ -8,7 +8,7 @@ CFG_DIR=$ELASTICELL_DIR/cfg
 LOG_DIR=$ELASTICELL_DIR/log
 
 start_elasticell_pd() {
-    start-stop-daemon --start --oknodo --background --make-pidfile --pidfile $ELASTICELL_DIR/pd$1.pid --startas $ELASTICELL_DIR/pd -- --cfg=$CFG_DIR/pd$1.json --log-file=$LOG_DIR/pd$1.log --log-level=debug
+    start-stop-daemon --start --oknodo --background --make-pidfile --pidfile $ELASTICELL_DIR/pd$1.pid --startas $ELASTICELL_DIR/pd -- --name=pd$1 --data=$ELASTICELL_DIR/pd$1/data --addr-rpc=:2080$1 --urls-client=http://127.0.0.1:237$1 --urls-peer=http://127.0.0.1:238$1 --initial-cluster=pd1=http://127.0.0.1:2381,pd2=http://127.0.0.1:2382,pd3=http://127.0.0.1:2383 --log-file=$LOG_DIR/pd$1.log --log-level=debug
 }
 
 start_elasticell_cell() {
@@ -140,14 +140,14 @@ do_status () {
 }
 
 do_clear () {
-    echo "clearing date, index and log......"
+    echo "clearing date and log......"
     mkdir -p $CFG_DIR $LOG_DIR &&
     cd $ELASTICELL_DIR &&
     rm -rf pd1/* pd2/* pd3/* cell1/* cell2/* cell3/* log/* &&
     mkdir -p pd1/data pd2/data pd3/data &&
-    mkdir -p cell1/data cell1/index &&
-    mkdir -p cell2/data cell2/index &&
-    mkdir -p cell3/data cell3/index
+    mkdir -p cell1/data &&
+    mkdir -p cell2/data &&
+    mkdir -p cell3/data
 }
 
 do_build () {
