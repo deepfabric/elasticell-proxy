@@ -19,6 +19,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/coreos/etcd/raft"
+	"github.com/coreos/etcd/raft/raftpb"
 	"github.com/deepfabric/elasticell/pkg/log"
 	"github.com/deepfabric/elasticell/pkg/pb/metapb"
 	"github.com/deepfabric/elasticell/pkg/pb/mraft"
@@ -27,8 +29,6 @@ import (
 	"github.com/deepfabric/elasticell/pkg/pd"
 	"github.com/deepfabric/elasticell/pkg/pool"
 	"github.com/deepfabric/elasticell/pkg/util"
-	"github.com/deepfabric/etcd/raft"
-	"github.com/deepfabric/etcd/raft/raftpb"
 	"golang.org/x/net/context"
 )
 
@@ -152,6 +152,14 @@ func (pr *PeerReplicate) handleAction(items []interface{}) {
 			pr.handleCheckSplit()
 		case checkCompact:
 			pr.handleCheckCompact()
+		case doCampaign:
+			_, err := pr.maybeCampaign()
+			if err != nil {
+				log.Fatalf("raftstore[cell-%d]: new split cell campaign failed, newCell=<%d> errors:\n %+v",
+					pr.cellID,
+					pr.getCell(),
+					err)
+			}
 		}
 	}
 
@@ -535,7 +543,7 @@ func (pr *PeerReplicate) handleRaftReadyAppend(ctx *readyContext, rd *raft.Ready
 	pr.handleSaveRaftState(ctx)
 	pr.handleSaveApplyState(ctx)
 
-	err := pr.store.engine.Write(ctx.wb)
+	err := pr.store.engine.Write(ctx.wb, globalCfg.EnableSyncRaftLog)
 	if err != nil {
 		log.Fatalf("raftstore[cell-%d]: handle raft ready failure, errors\n %+v",
 			pr.getCell().ID,

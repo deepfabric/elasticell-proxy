@@ -19,6 +19,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/coreos/etcd/raft"
+	"github.com/coreos/etcd/raft/raftpb"
 	"github.com/deepfabric/elasticell/pkg/log"
 	"github.com/deepfabric/elasticell/pkg/pb/metapb"
 	"github.com/deepfabric/elasticell/pkg/pb/mraft"
@@ -27,8 +29,6 @@ import (
 	"github.com/deepfabric/elasticell/pkg/pd"
 	"github.com/deepfabric/elasticell/pkg/storage"
 	"github.com/deepfabric/elasticell/pkg/util"
-	"github.com/deepfabric/etcd/raft"
-	"github.com/deepfabric/etcd/raft/raftpb"
 	"github.com/pkg/errors"
 	"golang.org/x/net/context"
 )
@@ -512,6 +512,13 @@ func (s *Store) doApplySplit(cellID uint64, result *splitResult) {
 			err)
 	}
 
+	s.keyRanges.Update(left)
+	s.keyRanges.Update(right)
+
+	newPR.sizeDiffHint = globalCfg.ThresholdSplitCheckBytes
+	newPR.startRegistrationJob()
+	s.replicatesMap.put(newPR.cellID, newPR)
+
 	// If this peer is the leader of the cell before split, it's intuitional for
 	// it to become the leader of new split cell.
 	// The ticks are accelerated here, so that the peer for the new split cell
@@ -522,17 +529,7 @@ func (s *Store) doApplySplit(cellID uint64, result *splitResult) {
 	// In this worst case scenario, the new split raft group will not be available
 	// since there is no leader established during one election timeout after the split.
 	if pr.isLeader() && len(right.Peers) > 1 {
-		succ, err := newPR.maybeCampaign()
-		if err != nil {
-			log.Fatalf("raftstore-apply[cell-%d]: new split cell campaign failed, newCell=<%d> errors:\n %+v",
-				cellID,
-				right,
-				err)
-		}
-
-		if succ {
-			newPR.onRaftTick(nil)
-		}
+		newPR.addAction(doCampaign)
 	}
 
 	if pr.isLeader() {
@@ -544,7 +541,6 @@ func (s *Store) doApplySplit(cellID uint64, result *splitResult) {
 			pr.ps.applyState.String())
 
 		pr.doHeartbeat()
-		newPR.doHeartbeat()
 
 		err := s.startReportSpltJob(left, right)
 		if err != nil {
@@ -552,17 +548,14 @@ func (s *Store) doApplySplit(cellID uint64, result *splitResult) {
 				cellID,
 				err)
 		}
+	} else {
+		if vote, ok := pr.store.removeDroppedVoteMsg(newPR.cellID); ok {
+			newPR.step(vote)
+		}
 	}
 
-	s.keyRanges.Update(left)
-	s.keyRanges.Update(right)
-
-	newPR.sizeDiffHint = globalCfg.ThresholdSplitCheckBytes
-	newPR.startRegistrationJob()
-	s.replicatesMap.put(newPR.cellID, newPR)
-
 	if err = s.notifySplitCellIndex(left.GetID(), right.GetID()); err != nil {
-		log.Errorf("raftstore-apply[cell-%d]: doExecSplitIndex failed\n%+v",
+		log.Errorf("raftstore-apply[cell-%d]: notifySplitCellIndex failed\n%+v",
 			left.GetID(), err)
 	}
 
@@ -883,8 +876,7 @@ func (s *Store) notifySplitCellIndex(leftCellID uint64, rightCellID uint64) (err
 		},
 	}
 	var idxReqB []byte
-	idxReqB, err = idxReq.Marshal()
-	if err != nil {
+	if idxReqB, err = idxReq.Marshal(); err != nil {
 		return
 	}
 	_, err = listEng.RPush(idxReqQueueKey, idxReqB)

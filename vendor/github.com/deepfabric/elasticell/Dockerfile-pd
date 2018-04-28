@@ -10,9 +10,7 @@ RUN chmod +x /apps/deepfabric/pd \
 
 ENV ELASTICELL_HOME=/apps/deepfabric
 ENV ELASTICELL_EXEC=pd
-ENV ELASTICELL_LOG_LEVEL=info
-ENV ELASTICELL_LOG_TARGET=CONSOLE
 
 WORKDIR /apps/deepfabric
 
-ENTRYPOINT ./entrypoint.sh
+ENTRYPOINT ["/bin/sh", "./entrypoint.sh"]

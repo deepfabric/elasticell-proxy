@@ -19,21 +19,3 @@
 # [[override]]
 #  name = "github.com/x/y"
 #  version = "2.4.0"
-
-
-[[constraint]]
-  name = "github.com/Workiva/go-datastructures"
-  version = "1.0.34"
-
-[[constraint]]
-  name = "github.com/deepfabric/elasticell"
-  branch = "master"
-
-[[constraint]]
-  name = "github.com/fagongzi/goetty"
-
-[[constraint]]
-  name = "github.com/pkg/errors"
-
-[[constraint]]
-  name = "golang.org/x/net"

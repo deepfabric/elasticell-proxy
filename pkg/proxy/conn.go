@@ -131,12 +131,14 @@ func (bc *backend) writeLoop() {
 			out := bc.conn.OutBuf()
 			for i := int64(0); i < n; i++ {
 				r := items[i].(*req)
-				log.Debugf("backend-[%s]: ready to send: %s",
-					bc.addr,
-					r.raftReq.String())
+				if log.DebugEnabled() {
+					log.Debugf("backend-[%s]: ready to send: %s",
+						bc.addr,
+						r.raftReq.String())
+				}
 				codec.WriteProxyMessage(codec.RedisBegin, r.raftReq, out)
 			}
-			err = bc.conn.WriteOutBuf()
+			err = bc.conn.Flush()
 			if err != nil {
 				for i := int64(0); i < n; i++ {
 					r := items[i].(*req)
@@ -144,9 +146,6 @@ func (bc *backend) writeLoop() {
 				}
 				continue
 			}
-
-			log.Debugf("backend-[%s]: flushed",
-				bc.addr)
 		}
 	}()
 }
@@ -181,7 +180,10 @@ func (p *RedisProxy) createConn(addr string) *backend {
 		return bc
 	}
 
-	conn := goetty.NewConnector(p.getConnectionCfg(addr), &codec.ProxyDecoder{}, &codec.ProxyEncoder{})
+	conn := goetty.NewConnector(addr,
+		goetty.WithClientConnectTimeout(defaultConnectTimeout),
+		goetty.WithClientDecoder(&codec.ProxyDecoder{}),
+		goetty.WithClientEncoder(&codec.ProxyEncoder{}))
 	b := newBackend(p, addr, conn)
 	p.bcs[addr] = b
 
@@ -193,13 +195,6 @@ func (p *RedisProxy) createConn(addr string) *backend {
 	sort.Strings(p.bcAddrs)
 	p.Unlock()
 	return b
-}
-
-func (p *RedisProxy) getConnectionCfg(addr string) *goetty.Conf {
-	return &goetty.Conf{
-		Addr: addr,
-		TimeoutConnectToServer: defaultConnectTimeout,
-	}
 }
 
 func (p *RedisProxy) checkConnect(addr string, bc *backend) bool {

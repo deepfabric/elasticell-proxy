@@ -81,7 +81,7 @@ func (rs *redisSession) writeLoop() {
 		for i := int64(0); i < n; i++ {
 			rs.doResp(items[i].(*raftcmdpb.Response), buf)
 		}
-		rs.session.WriteOutBuf()
+		rs.session.Flush()
 		rs.RUnlock()
 	}
 }

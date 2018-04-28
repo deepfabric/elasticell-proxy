@@ -109,9 +109,8 @@ func NewRedisProxy(cfg *Cfg) *RedisProxy {
 	}
 
 	redisSvr := goetty.NewServer(cfg.Addr,
-		redis.NewRedisDecoder(),
-		goetty.NewEmptyEncoder(),
-		goetty.NewInt64IDGenerator())
+		goetty.WithServerDecoder(redis.NewRedisDecoder()),
+		goetty.WithServerEncoder(goetty.NewEmptyEncoder()))
 
 	watcher := pd.NewWatcher(client,
 		cfg.AddrNotify,

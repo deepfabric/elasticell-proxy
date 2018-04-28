@@ -26,11 +26,11 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/coreos/etcd/raft"
 	"github.com/deepfabric/elasticell/pkg/log"
 	"github.com/deepfabric/elasticell/pkg/pb/metapb"
 	"github.com/deepfabric/elasticell/pkg/server"
 	"github.com/deepfabric/elasticell/pkg/util"
-	"github.com/deepfabric/etcd/raft"
 )
 
 const (
@@ -83,9 +83,11 @@ var (
 	workerCountSentSnap       = flag.Uint64("worker-count-sent-snap", 4, "Worker count: sent snap messages")
 	workerCountApply          = flag.Uint64("worker-count-apply", 64, "Worker count: apply raft log")
 	enableMetricsRequest      = flag.Bool("enable-metrics-request", false, "Enable: request metrics")
+	enableSyncRaftLog         = flag.Bool("enable-sync-raftlog", false, "Enable: sync to disk while append the raft log")
 
 	// metric
 	metricJob          = flag.String("metric-job", "", "prometheus job name")
+	metricInstance     = flag.String("metric-instance", "", "prometheus instance name")
 	metricAddress      = flag.String("metric-address", "", "prometheus proxy address")
 	metricIntervalSync = flag.Uint64("interval-metric-sync", 0, "Interval(sec): metric sync")
 )
@@ -207,8 +209,9 @@ func parseCfg() *server.Cfg {
 	cfg.Node.RaftStore.WorkerCountSentSnap = *workerCountSentSnap
 	cfg.Node.RaftStore.WorkerCountApply = *workerCountApply
 	cfg.Node.RaftStore.EnableMetricsRequest = *enableMetricsRequest
+	cfg.Node.RaftStore.EnableSyncRaftLog = *enableSyncRaftLog
 
-	cfg.Metric = util.NewMetricCfg(*metricJob, *metricAddress, time.Second*time.Duration(*metricIntervalSync))
+	cfg.Metric = util.NewMetricCfg(*metricJob, *metricInstance, *metricAddress, time.Second*time.Duration(*metricIntervalSync))
 	return cfg
 }
 

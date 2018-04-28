@@ -19,6 +19,7 @@ import (
 
 	"github.com/Workiva/go-datastructures/queue"
 
+	"github.com/coreos/etcd/raft"
 	"github.com/deepfabric/elasticell/pkg/log"
 	"github.com/deepfabric/elasticell/pkg/pb/metapb"
 	"github.com/deepfabric/elasticell/pkg/pb/mraft"
@@ -27,7 +28,7 @@ import (
 	"github.com/deepfabric/elasticell/pkg/pd"
 	"github.com/deepfabric/elasticell/pkg/pool"
 	"github.com/deepfabric/elasticell/pkg/util"
-	"github.com/deepfabric/etcd/raft"
+	"github.com/pilosa/pilosa"
 	"golang.org/x/net/context"
 )
 
@@ -36,6 +37,7 @@ type action int
 const (
 	checkSplit = iota
 	checkCompact
+	doCampaign
 )
 
 // PeerReplicate is the cell's peer replicate. Every cell replicate has a PeerReplicate.
@@ -64,6 +66,7 @@ type PeerReplicate struct {
 	deleteKeysHint    uint64
 	cancelTaskIds     []uint64
 	metrics           localMetrics
+	nextDocID         uint64
 }
 
 func createPeerReplicate(store *Store, cell *metapb.Cell) (*PeerReplicate, error) {
@@ -359,6 +362,7 @@ func (pr *PeerReplicate) destroy() error {
 	pr.stopEventLoop()
 
 	pr.store.removePendingSnapshot(pr.cellID)
+	pr.store.removeDroppedVoteMsg(pr.cellID)
 
 	wb := pr.store.engine.NewWriteBatch()
 
@@ -372,7 +376,7 @@ func (pr *PeerReplicate) destroy() error {
 		return err
 	}
 
-	err = pr.store.engine.Write(wb)
+	err = pr.store.engine.Write(wb, false)
 	if err != nil {
 		return err
 	}
@@ -407,4 +411,23 @@ func (pr *PeerReplicate) getCell() metapb.Cell {
 
 func (pr *PeerReplicate) getPeer() metapb.Peer {
 	return pr.peer
+}
+
+// AllocateDocID allocates a docID which is unique among the cluster.
+// Note that the same document has different docID on multiple replicas if inserted separatly, has smae docID if a replica is initialized from a snapshot of another.
+func (pr *PeerReplicate) AllocateDocID() (docID uint64, err error) {
+	if pr.nextDocID&(pilosa.SliceWidth-1) == 0 {
+		// the first time to allocate, or current allocated SliceWidth is used up
+		var rsp *pdpb.AllocIDRsp
+		if rsp, err = pr.store.pdClient.AllocID(context.TODO(), new(pdpb.AllocIDReq)); err != nil {
+			return
+		}
+		docID = rsp.GetID() * pilosa.SliceWidth
+		pr.nextDocID = docID + 1
+		log.Infof("peer.go[cell-%d]: batch allocated docID [%v, %v)", pr.cellID, docID, docID+pilosa.SliceWidth)
+	} else {
+		docID = pr.nextDocID
+		pr.nextDocID++
+	}
+	return
 }

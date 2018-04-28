@@ -20,85 +20,14 @@
 #  name = "github.com/x/y"
 #  version = "2.4.0"
 
-
-[[constraint]]
-  name = "github.com/Workiva/go-datastructures"
-  version = "1.0.34"
+ignored = ["github.com/deepfabric/go-nemo", "github.com/deepfabric/c-nemo"]
 
 [[constraint]]
   name = "github.com/coreos/etcd"
-  version = "3.1.2"
-
+  version = "v3.3.4"
+  source = "github.com/deepfabric/etcd"
+  
 [[constraint]]
-  name = "github.com/coreos/pkg"
-
-[[constraint]]
+  name = "github.com/pilosa/pilosa"
+  source = "github.com/deepfabric/pilosa"
   branch = "master"
-  name = "github.com/deepfabric/bkdtree"
-
-[[constraint]]
-  name = "github.com/deepfabric/etcd"
-
-[[constraint]]
-  branch = "master"
-  name = "github.com/deepfabric/go-datastructures"
-
-[[constraint]]
-  branch = "master"
-  name = "github.com/deepfabric/indexer"
-
-[[constraint]]
-  branch = "master"
-  name = "github.com/fagongzi/goetty"
-
-[[constraint]]
-  name = "github.com/garyburd/redigo"
-
-[[constraint]]
-  name = "github.com/gogo/protobuf"
-
-[[constraint]]
-  name = "github.com/golang/protobuf"
-
-[[constraint]]
-  branch = "master"
-  name = "github.com/google/btree"
-
-[[constraint]]
-  name = "github.com/gorilla/mux"
-  version = "1.4.0"
-
-[[constraint]]
-  name = "github.com/montanaflynn/stats"
-
-[[constraint]]
-  name = "github.com/pingcap/check"
-
-[[constraint]]
-  name = "github.com/pkg/errors"
-
-[[constraint]]
-  name = "github.com/prometheus/client_golang"
-
-[[constraint]]
-  name = "github.com/prometheus/common"
-
-[[constraint]]
-  name = "github.com/shirou/gopsutil"
-
-[[constraint]]
-  name = "github.com/stretchr/testify"
-
-[[constraint]]
-  name = "github.com/unrolled/render"
-
-[[constraint]]
-  name = "github.com/urfave/negroni"
-  version = "0.2.0"
-
-[[constraint]]
-  name = "golang.org/x/net"
-
-[[constraint]]
-  name = "google.golang.org/grpc"
-  version = "1.0.5"
