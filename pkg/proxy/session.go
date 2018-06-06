@@ -32,6 +32,7 @@ func newSession(session goetty.IOSession) *redisSession {
 }
 
 func (rs *redisSession) close() {
+	rs.session.Close()
 	rs.Lock()
 	rs.resps.Dispose()
 	log.Infof("redis-[%s]: closed", rs.addr)
