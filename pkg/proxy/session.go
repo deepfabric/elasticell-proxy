@@ -77,6 +77,7 @@ func (rs *redisSession) writeLoop() {
 
 		rs.RLock()
 		if !rs.session.IsConnected() {
+			rs.RUnlock()
 			return
 		}
 
