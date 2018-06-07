@@ -70,10 +70,13 @@ func (rs *redisSession) writeLoop() {
 	items := make([]interface{}, batch, batch)
 
 	for {
-		rs.RLock()
 		n, err := rs.resps.Get(batch, items)
 		if nil != err {
-			rs.RUnlock()
+			return
+		}
+
+		rs.RLock()
+		if !rs.session.IsConnected() {
 			return
 		}
 
