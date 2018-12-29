@@ -11,6 +11,7 @@
     "retryDuration": 2000,
     "workerCount": 64,
     "supportCMDs": [
+        "ping",
         "mget",
         "mset",
         "query",
@@ -36,6 +37,7 @@
         "hkeys",
         "hvals",
         "hgetall",
+        "hscanget",
         "hlen",
         "hmget",
         "hmset",

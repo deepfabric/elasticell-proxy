@@ -21,11 +21,20 @@ import (
 	"syscall"
 
 	"github.com/deepfabric/elasticell-proxy/pkg/proxy"
+	"github.com/deepfabric/elasticell-proxy/pkg/util"
 	"github.com/deepfabric/elasticell/pkg/log"
+)
+
+var (
+	version = flag.Bool("version", false, "Show version info")
 )
 
 func main() {
 	flag.Parse()
+
+	if *version && util.PrintVersion() {
+		os.Exit(0)
+	}
 
 	log.InitLog()
 
